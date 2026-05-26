@@ -1,0 +1,10 @@
+{
+  "name": "pop_ballad",
+  "beats_per_bar": 4,
+  "events": [
+    {"beat_position": 1.0, "note_type": "root",  "octave_offset": -2, "velocity": 80, "duration_beats": 1.0},
+    {"beat_position": 2.0, "note_type": "triad", "octave_offset": -1, "velocity": 60, "duration_beats": 0.5},
+    {"beat_position": 3.0, "note_type": "triad", "octave_offset": -1, "velocity": 65, "duration_beats": 0.5},
+    {"beat_position": 4.0, "note_type": "triad", "octave_offset": -1, "velocity": 60, "duration_beats": 0.5}
+  ]
+}

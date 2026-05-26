@@ -1,0 +1,128 @@
+"""
+Pydantic-based configuration system for the pipeline.
+
+All tunable parameters are defined here with sensible defaults.
+The root `PipelineConfig` can be loaded from a YAML file via
+`PipelineConfig.from_yaml(path)`.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+import yaml
+from pydantic import BaseModel, Field
+
+
+# ── Step 1: Demucs ───────────────────────────────────────────────────────────
+
+class SeparatorConfig(BaseModel):
+    """Configuration for the Demucs stem separator."""
+
+    model: str = "htdemucs"
+    device: str = "auto"
+    shifts: int = 1
+    overlap: float = 0.25
+    output_format: str = "wav"
+
+
+# ── Step 2: BasicPitch ───────────────────────────────────────────────────────
+
+class VocalTranscriptionConfig(BaseModel):
+    """Configuration for BasicPitch vocal transcription."""
+
+    onset_threshold: float = 0.5
+    frame_threshold: float = 0.3
+    minimum_note_length_ms: float = 58.0
+    minimum_frequency_hz: float = 80.0
+    maximum_frequency_hz: float = 1100.0
+
+
+# ── Step 3A: Piano Transcription ─────────────────────────────────────────────
+
+class PianoTranscriptionConfig(BaseModel):
+    """Configuration for ByteDance piano transcription."""
+
+    device: str = "auto"
+    checkpoint: Optional[str] = None
+
+
+# ── Step 3B: Algorithmic Arranger ────────────────────────────────────────────
+
+class ArrangerConfig(BaseModel):
+    """Configuration for the algorithmic chord-to-pattern arranger."""
+
+    default_pattern: str = "pop_ballad"
+    pattern_dir: Path = Path("assets/patterns")
+    chord_detection_method: str = "chroma"
+    beats_per_bar: int = 4
+
+
+# ── Step 4: Playability Filter ───────────────────────────────────────────────
+
+class PlayabilityConfig(BaseModel):
+    """Configuration for human-playability constraints."""
+
+    max_hand_span_semitones: int = 15
+    max_polyphony_per_hand: int = 4
+    quantization_grid: int = 16
+    pruning_priority: list[str] = Field(default=["P5", "M3", "m3"])
+
+
+# ── Step 5: Video Rendering ──────────────────────────────────────────────────
+
+class VideoConfig(BaseModel):
+    """Configuration for MIDIVisualizer video rendering."""
+
+    midi_visualizer_path: str = "MIDIVisualizer"
+    resolution: str = "1920x1080"
+    fps: int = 60
+    background_color: str = "0.1 0.1 0.12"
+    note_speed: float = 1.0
+    additional_args: list[str] = Field(default_factory=list)
+
+
+# ── Root Configuration ───────────────────────────────────────────────────────
+
+class PipelineConfig(BaseModel):
+    """Root configuration aggregating all sub-configs."""
+
+    include_vocals: bool = True
+    has_piano: bool = True
+    output_dir: Path = Path("data/output")
+    intermediate_dir: Path = Path("data/intermediate")
+
+    separator: SeparatorConfig = SeparatorConfig()
+    vocal_transcription: VocalTranscriptionConfig = VocalTranscriptionConfig()
+    piano_transcription: PianoTranscriptionConfig = PianoTranscriptionConfig()
+    arranger: ArrangerConfig = ArrangerConfig()
+    playability: PlayabilityConfig = PlayabilityConfig()
+    video: VideoConfig = VideoConfig()
+
+    @classmethod
+    def from_yaml(cls, path: Path) -> "PipelineConfig":
+        """Load configuration from a YAML file, merging with defaults.
+
+        Args:
+            path: Path to the YAML configuration file.
+
+        Returns:
+            A fully-populated PipelineConfig instance.
+
+        Raises:
+            FileNotFoundError: If the YAML file does not exist.
+            yaml.YAMLError: If the file contains invalid YAML.
+        """
+        config_path = Path(path)
+        if not config_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+        with open(config_path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+
+        # The YAML may nest pipeline-level keys under "pipeline:"
+        pipeline_block = raw.pop("pipeline", {})
+        merged = {**pipeline_block, **raw}
+
+        return cls.model_validate(merged)
