@@ -42,10 +42,13 @@ class VocalTranscriptionConfig(BaseModel):
 # ── Step 3A: Piano Transcription ─────────────────────────────────────────────
 
 class PianoTranscriptionConfig(BaseModel):
-    """Configuration for ByteDance piano transcription."""
+    """Configuration for BasicPitch piano transcription."""
 
-    device: str = "auto"
-    checkpoint: Optional[str] = None
+    onset_threshold: float = 0.6
+    frame_threshold: float = 0.5
+    minimum_note_length_ms: float = 50.0
+    minimum_frequency_hz: float = 27.5    # A0 — lowest piano key
+    maximum_frequency_hz: float = 4186.0  # C8 — highest piano key
 
 
 # ── Step 3B: Algorithmic Arranger ────────────────────────────────────────────

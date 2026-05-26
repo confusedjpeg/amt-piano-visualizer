@@ -122,3 +122,85 @@ class MidiCleaner:
         for instrument in midi.instruments:
             instrument.program = program
         return midi
+
+    @staticmethod
+    def filter_short_notes(
+        midi: pretty_midi.PrettyMIDI,
+        min_duration_ms: float = 50.0,
+    ) -> pretty_midi.PrettyMIDI:
+        """Remove notes shorter than the minimum duration.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            min_duration_ms: Minimum note duration in milliseconds.
+
+        Returns:
+            The same PrettyMIDI object with short notes removed.
+        """
+        min_duration_sec = min_duration_ms / 1000.0
+        for instrument in midi.instruments:
+            instrument.notes = [
+                n for n in instrument.notes
+                if (n.end - n.start) >= min_duration_sec
+            ]
+        return midi
+
+    @staticmethod
+    def normalize_velocities(
+        midi: pretty_midi.PrettyMIDI,
+        min_vel: int = 60,
+        max_vel: int = 100,
+    ) -> pretty_midi.PrettyMIDI:
+        """Normalize and compress note velocities to a harmonious range.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            min_vel: Minimum allowed velocity.
+            max_vel: Maximum allowed velocity.
+
+        Returns:
+            The same PrettyMIDI object with velocities normalized.
+        """
+        for instrument in midi.instruments:
+            if not instrument.notes:
+                continue
+            
+            # Find current range
+            velocities = [n.velocity for n in instrument.notes]
+            current_min = min(velocities)
+            current_max = max(velocities)
+            current_range = current_max - current_min
+            
+            target_range = max_vel - min_vel
+
+            for n in instrument.notes:
+                if current_range == 0:
+                    n.velocity = min_vel + target_range // 2
+                else:
+                    # Scale to new range
+                    normalized = (n.velocity - current_min) / current_range
+                    new_vel = int(min_vel + (normalized * target_range))
+                    # Clamp just in case
+                    n.velocity = max(min_vel, min(max_vel, new_vel))
+
+        return midi
+
+    @staticmethod
+    def apply_legato(
+        midi: pretty_midi.PrettyMIDI,
+        extend_ms: float = 50.0,
+    ) -> pretty_midi.PrettyMIDI:
+        """Extend note durations to create a legato/sustain effect.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            extend_ms: Milliseconds to extend the end of each note.
+
+        Returns:
+            The same PrettyMIDI object with extended note endings.
+        """
+        extend_sec = extend_ms / 1000.0
+        for instrument in midi.instruments:
+            for n in instrument.notes:
+                n.end += extend_sec
+        return midi

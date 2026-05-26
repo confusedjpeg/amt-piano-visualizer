@@ -176,6 +176,12 @@ class PipelineOrchestrator:
 
             # Assign accompaniment to Channel 1 (LH)
             acc_midi = pretty_midi.PrettyMIDI(str(accompaniment_path))
+            
+            # Apply MIDI quality improvements to reduce jitter
+            acc_midi = self._cleaner.filter_short_notes(acc_midi, min_duration_ms=50.0)
+            acc_midi = self._cleaner.normalize_velocities(acc_midi, min_vel=60, max_vel=100)
+            acc_midi = self._cleaner.apply_legato(acc_midi, extend_ms=50.0)
+            
             acc_midi = self._cleaner.assign_channel(acc_midi, channel=1)
             acc_midi = self._cleaner.set_instrument(acc_midi, program=0)
             acc_midi.write(str(accompaniment_path))

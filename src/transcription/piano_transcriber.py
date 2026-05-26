@@ -1,17 +1,16 @@
 """
-Piano-to-MIDI transcription using ByteDance's piano_transcription_inference.
+Piano-to-MIDI transcription using Spotify's BasicPitch.
 
-Extracts a high-fidelity piano transcription from an audio file,
-preserving velocity dynamics and sustain pedal events.
+Extracts a polyphonic piano transcription from an audio file using the
+same modern ONNX-based neural network used for vocal transcription,
+but configured for the full piano frequency range (A0–C8).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pretty_midi
-import torch
 
 from src.pipeline.config import PianoTranscriptionConfig
 from src.pipeline.errors import TranscriptionError
@@ -21,11 +20,10 @@ log = get_logger(__name__)
 
 
 class PianoTranscriber:
-    """Transcribe piano audio to MIDI using ByteDance's piano transcription model."""
+    """Transcribe piano audio to MIDI using Spotify's BasicPitch."""
 
     def __init__(self, config: PianoTranscriptionConfig) -> None:
         self._config = config
-        self._device = self._resolve_device(config.device)
 
     def transcribe(self, audio_path: Path, output_path: Path) -> Path:
         """
@@ -51,12 +49,15 @@ class PianoTranscriber:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            self._run_transcription(audio_path, output_path)
+            midi_data = self._run_basic_pitch(audio_path)
         except Exception as exc:
             raise TranscriptionError(
                 message=f"Piano transcription failed for {audio_path}",
                 cause=exc,
             ) from exc
+
+        # Write the MIDI output
+        midi_data.write(str(output_path))
 
         # Validate the output
         self._validate_output(output_path)
@@ -65,23 +66,29 @@ class PianoTranscriber:
 
     # ── Private Helpers ──────────────────────────────────────────────────
 
-    def _run_transcription(self, audio_path: Path, output_path: Path) -> None:
-        """Load audio at 16 kHz and run the ByteDance model."""
-        import librosa
-        from piano_transcription_inference import PianoTranscription
+    def _run_basic_pitch(self, audio_path: Path) -> pretty_midi.PrettyMIDI:
+        """Run BasicPitch inference and return the PrettyMIDI object."""
+        from basic_pitch.inference import predict
 
-        log.info(f"Running piano transcription on {audio_path}...")
+        log.info(f"Running BasicPitch piano transcription on {audio_path}...")
 
-        # The model expects 16 kHz mono audio
-        audio, _sr = librosa.load(str(audio_path), sr=16000, mono=True)
+        minimum_note_length_s = self._config.minimum_note_length_ms / 1000.0
 
-        transcriber = PianoTranscription(
-            device=self._device,
-            checkpoint_path=self._config.checkpoint,
+        _model_output, midi_data, _note_events = predict(
+            str(audio_path),
+            onset_threshold=self._config.onset_threshold,
+            frame_threshold=self._config.frame_threshold,
+            minimum_note_length=minimum_note_length_s,
+            minimum_frequency=self._config.minimum_frequency_hz,
+            maximum_frequency=self._config.maximum_frequency_hz,
         )
 
-        transcriber.transcribe(audio, str(output_path))
-        log.info(f"Piano transcription saved to {output_path}")
+        log.info(
+            f"BasicPitch piano transcription complete: "
+            f"{sum(len(i.notes) for i in midi_data.instruments)} notes"
+        )
+
+        return midi_data
 
     def _validate_output(self, midi_path: Path) -> None:
         """Check that the transcription produced a non-empty MIDI file."""
@@ -100,10 +107,3 @@ class PianoTranscriber:
             )
 
         log.info(f"Piano transcription validated: {total_notes} notes")
-
-    @staticmethod
-    def _resolve_device(device: str) -> str:
-        """Resolve 'auto' to the best available device."""
-        if device == "auto":
-            return "cuda" if torch.cuda.is_available() else "cpu"
-        return device
