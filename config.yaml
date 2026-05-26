@@ -1,0 +1,53 @@
+# ── Pipeline Defaults ──
+pipeline:
+  include_vocals: true
+  has_piano: true
+  output_dir: "data/output"
+  intermediate_dir: "data/intermediate"
+
+# ── Step 1: Demucs ──
+separator:
+  model: "htdemucs"         # htdemucs | htdemucs_ft | mdx_extra
+  device: "auto"            # auto | cpu | cuda
+  shifts: 1                 # Higher = better quality, slower
+  overlap: 0.25             # Overlap ratio between chunks
+  output_format: "wav"      # wav | mp3
+
+# ── Step 2: BasicPitch ──
+vocal_transcription:
+  onset_threshold: 0.5      # Note onset confidence threshold
+  frame_threshold: 0.3      # Frame-level activation threshold
+  minimum_note_length_ms: 58  # ~32nd note at 120 BPM
+  minimum_frequency_hz: 80.0  # Roughly E2 — floor for vocal range
+  maximum_frequency_hz: 1100.0  # Roughly C#6 — ceiling for vocal range
+
+# ── Step 3A: Piano Transcription ──
+piano_transcription:
+  device: "auto"
+  checkpoint: null           # null = use bundled default
+
+# ── Step 3B: Algorithmic Arranger ──
+arranger:
+  default_pattern: "pop_ballad"
+  pattern_dir: "assets/patterns"
+  chord_detection_method: "chroma"  # chroma | crema (if available)
+  beats_per_bar: 4
+
+# ── Step 4: Playability Filter ──
+playability:
+  max_hand_span_semitones: 15
+  max_polyphony_per_hand: 4
+  quantization_grid: 16      # 16 = 16th note, 32 = 32nd note
+  pruning_priority:           # Which intervals to drop first
+    - "P5"                    # Perfect 5th
+    - "M3"                    # Major 3rd
+    - "m3"                    # Minor 3rd
+
+# ── Step 5: MIDIVisualizer ──
+video:
+  midi_visualizer_path: "MIDIVisualizer"  # Must be on PATH or absolute
+  resolution: "1920x1080"
+  fps: 60
+  background_color: "0.1 0.1 0.12"       # Dark charcoal
+  note_speed: 1.0
+  additional_args: []         # Extra CLI flags passed verbatim

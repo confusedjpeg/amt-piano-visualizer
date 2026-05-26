@@ -1,0 +1,28 @@
+# Environments and packages
+venv/
+.venv/
+env/
+ENV/
+.env
+
+# Python caching & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Project-specific ignored data directories
+# We keep the directory structures but ignore individual run files, mp3s, or midi files.
+data/input/*
+!data/input/.gitkeep
+
+data/intermediate/*
+!data/intermediate/.gitkeep
+
+data/output/*
+!data/output/.gitkeep
