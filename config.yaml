@@ -13,6 +13,12 @@ separator:
   overlap: 0.25             # Overlap ratio between chunks
   output_format: "wav"      # wav | mp3
 
+# ── Pre-Transcription Noise Gate ──
+noise_gate:
+  threshold_db: -20.0         # Frames below this dB are muted to silence
+  frame_length: 2048          # FFT frame size for RMS energy computation
+  hop_length: 512             # Hop between consecutive frames
+
 # ── Step 2: BasicPitch ──
 vocal_transcription:
   onset_threshold: 0.5      # Note onset confidence threshold

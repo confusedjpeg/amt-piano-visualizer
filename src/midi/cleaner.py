@@ -204,3 +204,70 @@ class MidiCleaner:
             for n in instrument.notes:
                 n.end += extend_sec
         return midi
+
+    @staticmethod
+    def filter_ghost_notes(
+        midi: pretty_midi.PrettyMIDI,
+        absolute_vel_floor: int = 25,
+        reverb_vel_ceiling: int = 45,
+        reverb_max_duration_ms: float = 150.0,
+    ) -> pretty_midi.PrettyMIDI:
+        """Remove ghost notes using a compound velocity + duration filter.
+
+        This applies a tiered approach that is smarter than a flat velocity
+        cutoff. It prevents deleting legitimate soft sustained chords while
+        aggressively removing AI hallucinations:
+
+        Tier 1 — "Absolute Garbage": velocity < absolute_vel_floor
+            Always deleted. Way too quiet to be real; definitely an
+            overtone, harmonic artifact, or noise floor pickup.
+
+        Tier 2 — "Reverb Blip": velocity < reverb_vel_ceiling AND
+            duration < reverb_max_duration_ms
+            Deleted. If a note is both quiet AND short, it's almost
+            certainly a hallucinated reverb echo or transient blip.
+
+        Tier 3 — Everything else is kept. A note with velocity 35 held
+            for 2 seconds is a real chord fading out and should survive.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            absolute_vel_floor: Velocity below which notes are always
+                deleted (Tier 1). Default 25.
+            reverb_vel_ceiling: Velocity ceiling for the compound check
+                (Tier 2). Default 45.
+            reverb_max_duration_ms: Duration ceiling in ms for the
+                compound check (Tier 2). Default 150ms.
+
+        Returns:
+            The same PrettyMIDI object with ghost notes removed.
+        """
+        reverb_max_duration_sec = reverb_max_duration_ms / 1000.0
+
+        total_removed = 0
+        for instrument in midi.instruments:
+            original_count = len(instrument.notes)
+            surviving: list[pretty_midi.Note] = []
+
+            for note in instrument.notes:
+                duration = note.end - note.start
+
+                # Tier 1: Absolute garbage — always delete
+                if note.velocity < absolute_vel_floor:
+                    continue
+
+                # Tier 2: Reverb blip — quiet AND short = hallucination
+                if (
+                    note.velocity < reverb_vel_ceiling
+                    and duration < reverb_max_duration_sec
+                ):
+                    continue
+
+                # Tier 3: Keep everything else
+                surviving.append(note)
+
+            removed = original_count - len(surviving)
+            total_removed += removed
+            instrument.notes = surviving
+
+        return midi

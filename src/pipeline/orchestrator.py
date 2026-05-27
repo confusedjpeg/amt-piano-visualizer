@@ -16,6 +16,7 @@ from src.arranger.beat_analyzer import BeatAnalyzer
 from src.arranger.chord_detector import ChordDetector
 from src.arranger.pattern_library import PatternLibrary
 from src.audio.mixer import StemMixer
+from src.audio.noise_gate import NoiseGate
 from src.audio.separator import StemSeparator
 from src.midi.cleaner import MidiCleaner
 from src.midi.merger import MidiMerger
@@ -47,6 +48,11 @@ class PipelineOrchestrator:
         # Step 1: Audio
         self._separator = StemSeparator(config.separator)
         self._mixer = StemMixer()
+        self._noise_gate = NoiseGate(
+            threshold_db=config.noise_gate.threshold_db,
+            frame_length=config.noise_gate.frame_length,
+            hop_length=config.noise_gate.hop_length,
+        )
 
         # Step 2: Vocal transcription
         self._vocal_transcriber = VocalTranscriber(config.vocal_transcription)
@@ -125,10 +131,6 @@ class PipelineOrchestrator:
             # ── STEP 1: Stem Separation ──
             log.info("Step 1: Separating stems...")
             stems = self._separator.separate(audio_path, run_dir)
-            instrumental_path = self._mixer.mix_stems(
-                [stems.bass_path, stems.other_path],
-                run_dir / "instrumental.wav",
-            )
             steps_completed.append("stem_separation")
 
             # ── STEP 2: Vocal Transcription (conditional) ──
@@ -146,7 +148,6 @@ class PipelineOrchestrator:
                 vocals_midi = self._cleaner.clamp_note_range(vocals_midi, 43, 84)
                 vocals_midi = self._cleaner.assign_channel(vocals_midi, channel=0)
                 vocals_midi = self._cleaner.set_instrument(vocals_midi, program=0)
-                vocals_midi = self._quantizer.quantize(vocals_midi)
 
                 vocals_midi_path = run_dir / "vocals_cleaned.mid"
                 vocals_midi.write(str(vocals_midi_path))
@@ -159,29 +160,74 @@ class PipelineOrchestrator:
                 log.info("Step 2: Skipped (include_vocals=False)")
 
             # ── STEP 3: Accompaniment Generation ──
+            # CRITICAL: The audio routing forks here based on has_piano.
+            #
+            # Path A (has_piano=True):
+            #   Feed ONLY other.wav to the transcriber. The bass stem is
+            #   excluded because bass guitar vibrato and slides occupy
+            #   the same frequency range as the piano's left hand (C1–C3)
+            #   and cause the AI to hallucinate muddy, dissonant notes.
+            #   The noise gate is applied first to kill reverb tails.
+            #
+            # Path B (has_piano=False):
+            #   Mix bass.wav + other.wav → instrumental.wav, then feed
+            #   to the chord detector. The bass is REQUIRED here because
+            #   the chord root detection depends on hearing the bass note
+            #   to distinguish, e.g., C Major from A minor.
+
             if has_piano:
+                # ── PATH A: Neural piano transcription ──
                 log.info("Step 3A: Transcribing existing piano...")
+                log.info("  Using only 'other.wav' (bass excluded to prevent LH mud)")
+
+                # Apply noise gate to other.wav to kill reverb/bleed
+                gated_path = self._noise_gate.apply(
+                    stems.other_path,
+                    run_dir / "other_gated.wav",
+                )
+
                 accompaniment_path = self._piano_transcriber.transcribe(
-                    instrumental_path,
+                    gated_path,
                     run_dir / "accompaniment.mid",
                 )
+                steps_completed.append("noise_gate")
                 steps_completed.append("piano_transcription")
             else:
+                # ── PATH B: Algorithmic chord-based arrangement ──
                 log.info("Step 3B: Generating algorithmic arrangement...")
+                log.info("  Mixing bass + other for chord detection")
+
+                instrumental_path = self._mixer.mix_stems(
+                    [stems.bass_path, stems.other_path],
+                    run_dir / "instrumental.wav",
+                )
+
                 accompaniment_path = self._arranger.arrange(
                     instrumental_path,
                     run_dir / "accompaniment.mid",
                 )
                 steps_completed.append("algorithmic_arrangement")
 
-            # Assign accompaniment to Channel 1 (LH)
+            # ── Post-processing: Clean up accompaniment MIDI ──
             acc_midi = pretty_midi.PrettyMIDI(str(accompaniment_path))
-            
-            # Apply MIDI quality improvements to reduce jitter
+
+            # Compound ghost note filter (tiered velocity + duration)
+            # Tier 1: velocity < 25 → always delete (overtone/noise)
+            # Tier 2: velocity < 45 AND duration < 150ms → delete (reverb blip)
+            # Tier 3: keep everything else (soft sustained chords survive)
+            acc_midi = self._cleaner.filter_ghost_notes(
+                acc_midi,
+                absolute_vel_floor=25,
+                reverb_vel_ceiling=45,
+                reverb_max_duration_ms=150.0,
+            )
+
+            # Standard quality improvements
             acc_midi = self._cleaner.filter_short_notes(acc_midi, min_duration_ms=50.0)
             acc_midi = self._cleaner.normalize_velocities(acc_midi, min_vel=60, max_vel=100)
             acc_midi = self._cleaner.apply_legato(acc_midi, extend_ms=50.0)
-            
+
+            # Assign to Left Hand channel
             acc_midi = self._cleaner.assign_channel(acc_midi, channel=1)
             acc_midi = self._cleaner.set_instrument(acc_midi, program=0)
             acc_midi.write(str(accompaniment_path))

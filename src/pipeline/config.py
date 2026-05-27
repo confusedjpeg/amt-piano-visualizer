@@ -27,6 +27,16 @@ class SeparatorConfig(BaseModel):
     output_format: str = "wav"
 
 
+# ── Pre-Transcription Noise Gate ─────────────────────────────────────────────
+
+class NoiseGateConfig(BaseModel):
+    """Configuration for the pre-transcription noise gate."""
+
+    threshold_db: float = -20.0    # Frames below this dB are muted
+    frame_length: int = 2048       # FFT frame size for RMS computation
+    hop_length: int = 512          # Hop between frames
+
+
 # ── Step 2: BasicPitch ───────────────────────────────────────────────────────
 
 class VocalTranscriptionConfig(BaseModel):
@@ -97,6 +107,7 @@ class PipelineConfig(BaseModel):
     intermediate_dir: Path = Path("data/intermediate")
 
     separator: SeparatorConfig = SeparatorConfig()
+    noise_gate: NoiseGateConfig = NoiseGateConfig()
     vocal_transcription: VocalTranscriptionConfig = VocalTranscriptionConfig()
     piano_transcription: PianoTranscriptionConfig = PianoTranscriptionConfig()
     arranger: ArrangerConfig = ArrangerConfig()

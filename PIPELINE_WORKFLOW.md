@@ -18,7 +18,8 @@ graph TD
     
     %% Stems
     C -->|vocals.wav| D[Vocal Stream]
-    C -->|bass.wav & other.wav| E[Accompaniment Stream]
+    C -->|other.wav| E1[Other Stem]
+    C -->|bass.wav| E2[Bass Stem]
     C -->|drums.wav| F[Discarded Stems]
     
     %% Step 2: Vocal
@@ -26,24 +27,31 @@ graph TD
     G -->|Yes| H[Step 2: Spotify BasicPitch Vocal Transcription]
     G -->|No| I[Skip Vocal Transcription]
     
-    %% Step 3: Accompaniment
-    E --> J[Waveform Mixer: Summation & Normalization]
-    J -->|instrumental.wav| K{has_piano?}
+    %% Step 3: Fork based on has_piano
+    E1 --> K{has_piano?}
+    E2 --> K
     
-    %% Step 3A/3B
-    K -->|Yes: Path A| L[Step 3A: ByteDance Neural Piano Transcription]
-    K -->|No: Path B| M[Step 3B: Algorithmic Keyboard Arranger]
+    %% Path A: Piano exists — use only other.wav
+    K -->|"Yes: Path A (other.wav only)"| NG[Noise Gate: Mute frames below -20dB]
+    NG -->|other_gated.wav| L[Step 3A: BasicPitch Piano Transcription]
+    
+    %% Path B: No piano — mix bass+other for chords
+    K -->|"No: Path B (bass+other mixed)"| J[Waveform Mixer: Summation & Normalization]
+    J -->|instrumental.wav| M[Step 3B: Algorithmic Keyboard Arranger]
     
     %% Path B Details
     M --> M1[Librosa Beat & Tempo Tracking]
     M --> M2[Librosa CQT Chroma Chord Extraction]
     M --> M3[JSON Voicing Pattern Mapping]
     
+    %% Ghost Note Cleanup
+    L --> GN[Ghost Note Filter: Tiered Velocity + Duration Cleanup]
+    M3 --> GN
+    
     %% Step 4: MIDI Processing
     H --> N[Vocal MIDI Cleaning & Post-Processing]
     N -->|Channel 0: Right Hand| O[Step 4: MIDI Merger]
-    L -->|Channel 1: Left Hand| O
-    M3 -->|Channel 1: Left Hand| O
+    GN -->|Channel 1: Left Hand| O
     
     O --> P[Quantizer: Grid Snapping & Deduplication]
     P --> Q[Playability Filter: Ergonomic Constraint Solver]
@@ -55,8 +63,8 @@ graph TD
     T -->|No| U[FFmpeg Fallback Muxer]
     T -->|Yes| V[Rendered Output Video]
     U --> V
-    V --> W[data/output/<run_id>_synthesia.mp4]
-    Q -->|final_playable.mid| X[data/output/<run_id>_final.mid]
+    V --> W["data/output/run_id_synthesia.mp4"]
+    Q -->|final_playable.mid| X["data/output/run_id_final.mid"]
 ```
 
 ---
@@ -102,11 +110,13 @@ The pipeline dynamically shifts its execution graph based on two boolean paramet
 * **Workflow & Execution**:
   1. **Validation**: The orchestrator receives the target audio file, validates its existence and integrity, and assigns a unique `run_id`.
   2. **Stem Decomposition**: The system loads Meta’s four-stem Hybrid Transformer Demucs model (`htdemucs`). This neural network analyzes the stereo frequency spectra and separates the mixed master audio track into four discrete, high-quality `.wav` audio files: `vocals.wav`, `bass.wav`, `drums.wav`, and `other.wav`.
-  3. **Waveform Mixing**: The drums are discarded since drum beats are not mapped to harmonic piano voices. The `bass` and `other` (guitars, synths, strings) stems are fed into a waveform mixer.
-  4. **Summation & Normalization**: The mixer reads both waveforms using `soundfile`, pads the shorter track with digital silence, performs an element-wise numerical summation of the wave arrays, and divides the resulting waveform by its peak value. This creates a balanced, clipping-free `instrumental.wav` file that serves as the basis for accompaniment.
+  3. **Routing Decision**: The drums are discarded. The remaining stems (`bass.wav` and `other.wav`) are **not always mixed**. Instead, the pipeline forks based on the `has_piano` flag — see Step 3 for how each path uses these stems differently.
 
 > [!NOTE]
 > Separating the vocals from the instrumentation first prevents the vocal frequencies from interfering with the chord detection and piano transcription algorithms downstream.
+
+> [!IMPORTANT]
+> **Bass Stem Routing**: The `bass.wav` stem is deliberately **excluded** from Path A (piano transcription). Bass guitar vibrato, fret slides, and intonation imperfections occupy the same frequency range (C1–C3) as the piano's left hand. Feeding bass into the piano transcriber causes the AI to hallucinate muddy, dissonant notes. The bass is only mixed in for Path B, where the chord detector needs it to identify harmonic roots.
 
 ---
 
@@ -126,15 +136,23 @@ The pipeline dynamically shifts its execution graph based on two boolean paramet
 This phase forks into two distinct processing paths based on the `has_piano` config parameter.
 
 #### Path 3A: Neural Piano Transcription (`has_piano == True`)
-* **Primary Technology**: Spotify's `basic-pitch` (via `onnxruntime`)
+* **Primary Technology**: Spotify's `basic-pitch` (via `onnxruntime`), `librosa`, `soundfile`
+* **Audio Input**: `other.wav` only (bass excluded) → noise-gated → `other_gated.wav`
 * **Workflow & Execution**:
-  1. **ONNX Inference**: The pipeline passes the isolated `instrumental.wav` stem into the BasicPitch model — the same modern neural network used for vocal transcription — but configured for the full piano frequency range (A0 at 27.5 Hz to C8 at 4186 Hz). This produces significantly cleaner onset timings and more accurate polyphonic pitch detection than the previous ByteDance model.
-  2. **Polyphonic Transcription**: BasicPitch extracts polyphonic piano notes with precise onset/offset timings and velocity dynamics. Notes shorter than 50ms are filtered out during inference to eliminate micro-transients from harmonics.
-  3. **Output Generation**: The raw MIDI output is validated to ensure notes exist and is assigned to MIDI **Channel 1** (representing the **Left Hand** accompaniment).
+  1. **Pre-Transcription Noise Gate**: Before any AI inference, the `other.wav` stem is passed through a hard noise gate. The gate computes per-frame RMS energy, converts to dB, and mutes any frame below the configured threshold (default: **-20 dB**) to digital silence. This eliminates reverb tails, room noise, and stem bleed that would otherwise cause the AI to hallucinate phantom notes. The gated output is written as `other_gated.wav`.
+  2. **ONNX Inference**: The pipeline passes the noise-gated audio into the BasicPitch model — the same modern neural network used for vocal transcription — but configured for the full piano frequency range (A0 at 27.5 Hz to C8 at 4186 Hz). This produces significantly cleaner onset timings and more accurate polyphonic pitch detection.
+  3. **Polyphonic Transcription**: BasicPitch extracts polyphonic piano notes with precise onset/offset timings and velocity dynamics. Notes shorter than 50ms are filtered out during inference to eliminate micro-transients from harmonics.
+  4. **Ghost Note Cleanup**: A compound velocity + duration filter is applied to the raw MIDI output:
+     * *Tier 1 — "Absolute Garbage"*: Notes with velocity < 25 are always deleted (overtone/noise floor artifacts).
+     * *Tier 2 — "Reverb Blip"*: Notes with velocity < 45 AND duration < 150ms are deleted (hallucinated reverb echoes).
+     * *Tier 3 — Keep*: All remaining notes survive. A soft note (velocity 35) held for 2 seconds is a legitimate fading chord and is preserved.
+  5. **Output Generation**: The cleaned MIDI output is validated to ensure notes exist and is assigned to MIDI **Channel 1** (representing the **Left Hand** accompaniment).
 
 #### Path 3B: Algorithmic Keyboard Arrangement (`has_piano == False`)
-* **Primary Technology**: `librosa`, `numpy`, `scipy`
+* **Primary Technology**: `librosa`, `numpy`, `scipy`, `soundfile`
+* **Audio Input**: `bass.wav` + `other.wav` → mixed into `instrumental.wav`
 * **Workflow & Execution**:
+  0. **Stem Mixing**: Unlike Path A, Path B **requires** the bass stem. The `bass.wav` and `other.wav` stems are summed and normalized into a single `instrumental.wav` file. The bass guitar provides the harmonic root information that the chord detector needs to distinguish, e.g., C Major from A minor.
   1. **Tempo and Beat Grid Tracking**: Librosa's onset envelope spectral flux analyzer calculates the global tempo in Beats Per Minute (BPM) and maps every beat's exact timestamp in seconds. The arranger divides the timeline into bars using an estimated downbeat grid (e.g., every 4 beats for 4/4 time).
   2. **Constant-Q Transform (CQT) Chroma Extraction**: The `instrumental.wav` file is analyzed via Constant-Q Transform. This folds the audio spectrum into a 12-semitone chroma vector representing the intensity of the 12 chromatic pitches (C, C#, D... B) present in the music at any moment.
   3. **Beat-Synchronous Smoothing**: Chroma vectors are averaged within each detected beat boundary to smooth out transients and establish steady, beat-aligned harmonic states.
@@ -178,6 +196,10 @@ This phase forks into two distinct processing paths based on the `has_piano` con
 
 ## 5. Summary of Key Algorithmic and Musical Decisions
 
+* **Bass Stem Exclusion (Path A)**: The bass guitar occupies the same frequency range (C1–C3) as the piano's left hand. Bass vibrato, fret slides, and intonation imperfections cause the AI to hallucinate muddy, dissonant MIDI notes. Removing `bass.wav` from Path A and feeding only `other.wav` to the transcriber eliminates this interference. The piano in `other.wav` already contains the pianist's own left-hand low notes.
+* **Bass Stem Inclusion (Path B)**: The chord detector *requires* the bass to correctly identify harmonic roots. Without bass, the algorithm cannot distinguish between, e.g., C Major and A minor. Path B deliberately mixes `bass.wav + other.wav` before chord analysis.
+* **Pre-Transcription Noise Gate**: A hard amplitude gate mutes frames below -20 dB before the audio reaches the neural transcriber. This kills reverb tails, room noise, and stem bleed that the AI would otherwise interpret as additional notes.
+* **Compound Ghost Note Filter**: Rather than a flat velocity cutoff, a tiered approach preserves legitimate soft chords while aggressively removing AI hallucinations: velocity < 25 = always delete; velocity < 45 AND duration < 150ms = delete (reverb blip); everything else = keep.
 * **Vocal Vibrato Removal**: Stripping pitch bends prevents synthesized pianos from sounding out-of-tune or "wobbly" when mimicking vocal contours.
 * **Ergonomic Pruning (Bass & Melody Protection)**: When pruning notes for hand span or polyphony constraints, the algorithm *never* deletes the highest note (retains melody definition) or the lowest note (retains the harmonic foundation).
 * **Harmonic Pruning Priority**: Perfect 5ths are pruned before 3rds because the 3rd defines whether a chord is major or minor (crucial for emotional flavor), whereas the 5th is harmonically redundant and can be omitted without changing the chord quality.
