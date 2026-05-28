@@ -211,7 +211,39 @@ class PipelineOrchestrator:
             # ── Post-processing: Clean up accompaniment MIDI ──
             acc_midi = pretty_midi.PrettyMIDI(str(accompaniment_path))
 
-            # Compound ghost note filter (tiered velocity + duration)
+            # ── Strict Ghost Note Pruning (3 surgical rules) ──
+            # These run BEFORE velocity normalization so the raw AI
+            # velocities are available for pruning decisions.
+            gnp = self._config.ghost_note_pruning
+
+            # Rule 1: Minimum Duration Hard Cap (80ms default)
+            # Unconditionally kill any note shorter than the threshold.
+            # If it's that short, it's an AI hallucination or audio glitch.
+            acc_midi = self._cleaner.filter_minimum_duration(
+                acc_midi,
+                min_duration_ms=gnp.min_duration_ms,
+            )
+
+            # Rule 2: Polyphony Choke (Chord Thinner)
+            # If more than max_chord_notes sound simultaneously, keep the
+            # lowest (bass root) + highest (harmony top), then keep the
+            # loudest inner notes and delete the quietest.
+            acc_midi = self._cleaner.filter_polyphony_choke(
+                acc_midi,
+                max_chord_notes=gnp.max_chord_notes,
+            )
+
+            # Rule 3: Reverb Shadow Filter
+            # If a quiet note (vel < 45) appears within 200ms of a loud
+            # note (vel > 70), it's almost certainly a reverb ghost.
+            acc_midi = self._cleaner.filter_reverb_shadow(
+                acc_midi,
+                shadow_vel_threshold=gnp.shadow_vel_threshold,
+                loud_vel_threshold=gnp.loud_vel_threshold,
+                shadow_window_ms=gnp.shadow_window_ms,
+            )
+
+            # ── Existing tiered ghost note filter ──
             # Tier 1: velocity < 25 → always delete (overtone/noise)
             # Tier 2: velocity < 45 AND duration < 150ms → delete (reverb blip)
             # Tier 3: keep everything else (soft sustained chords survive)

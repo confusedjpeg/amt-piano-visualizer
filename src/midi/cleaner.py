@@ -271,3 +271,249 @@ class MidiCleaner:
             instrument.notes = surviving
 
         return midi
+
+    # ── Strict Ghost Note Pruning Rules ──────────────────────────────────
+
+    @staticmethod
+    def filter_minimum_duration(
+        midi: pretty_midi.PrettyMIDI,
+        min_duration_ms: float = 80.0,
+    ) -> pretty_midi.PrettyMIDI:
+        """Rule 1 — Minimum Duration Hard Cap.
+
+        Unconditionally delete any note shorter than min_duration_ms.
+        A real human pressing a piano key will almost never hold it for
+        less than ~80ms, even when playing very fast.  Anything shorter
+        is an AI hallucination or an audio glitch — velocity is irrelevant.
+
+        This is stricter than ``filter_short_notes`` (which uses 50ms as a
+        safety net later in the chain).  This runs **first** as a brute-
+        force blip killer.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            min_duration_ms: Minimum note duration in milliseconds.
+                Notes shorter than this are always deleted. Default 80ms.
+
+        Returns:
+            The same PrettyMIDI object with ultra-short notes removed.
+        """
+        min_duration_sec = min_duration_ms / 1000.0
+        total_removed = 0
+
+        for instrument in midi.instruments:
+            original_count = len(instrument.notes)
+            instrument.notes = [
+                n for n in instrument.notes
+                if (n.end - n.start) >= min_duration_sec
+            ]
+            total_removed += original_count - len(instrument.notes)
+
+        if total_removed > 0:
+            from src.utils.logger import get_logger
+            get_logger(__name__).debug(
+                f"Rule 1 (Min Duration): removed {total_removed} notes "
+                f"shorter than {min_duration_ms}ms"
+            )
+
+        return midi
+
+    @staticmethod
+    def filter_polyphony_choke(
+        midi: pretty_midi.PrettyMIDI,
+        max_chord_notes: int = 4,
+    ) -> pretty_midi.PrettyMIDI:
+        """Rule 2 — Polyphony Choke (Chord Thinner).
+
+        When AI hears a complex chord, it often hallucinates extra notes
+        inside that chord because of overtones.  This creates muddy,
+        dissonant clusters — especially in the left hand.
+
+        For each time instant, if more than ``max_chord_notes`` notes are
+        sounding simultaneously on one instrument:
+
+        1. Keep the **lowest** note (bass root).
+        2. Keep the **highest** note (harmony top).
+        3. Sort all inner notes by velocity (ascending).
+        4. Delete the quietest inner notes until only ``max_chord_notes``
+           remain.
+
+        This runs **before** velocity normalization so the raw AI
+        velocities are available for pruning decisions.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            max_chord_notes: Maximum simultaneous notes allowed per
+                instrument before choking. Default 4.
+
+        Returns:
+            The same PrettyMIDI object with overstuffed chords thinned.
+        """
+        if max_chord_notes < 2:
+            return midi  # Need at least bass + top
+
+        total_removed = 0
+
+        for instrument in midi.instruments:
+            if not instrument.notes:
+                continue
+
+            # Build a sorted timeline of ON/OFF events
+            events: list[tuple[float, bool, int]] = []
+            for idx, note in enumerate(instrument.notes):
+                events.append((note.start, True, idx))   # ON
+                events.append((note.end, False, idx))     # OFF
+
+            # Sort: by time, then OFF before ON at the same timestamp
+            events.sort(key=lambda e: (e[0], 0 if not e[1] else 1))
+
+            active_ids: set[int] = set()
+            notes_to_remove: set[int] = set()
+
+            for _time, is_on, note_idx in events:
+                if is_on:
+                    active_ids.add(note_idx)
+
+                    # Get currently active, non-removed notes
+                    live_ids = [
+                        i for i in active_ids if i not in notes_to_remove
+                    ]
+                    if len(live_ids) <= max_chord_notes:
+                        continue
+
+                    # We have too many notes — need to choke
+                    live_notes = [
+                        (i, instrument.notes[i]) for i in live_ids
+                    ]
+
+                    # Sort by pitch to find lowest and highest
+                    live_notes.sort(key=lambda x: x[1].pitch)
+                    lowest_id = live_notes[0][0]
+                    highest_id = live_notes[-1][0]
+
+                    # Inner notes (everything except lowest and highest)
+                    inner = [
+                        (i, n) for i, n in live_notes
+                        if i != lowest_id and i != highest_id
+                    ]
+
+                    # Sort inner by velocity ascending (quietest first)
+                    inner.sort(key=lambda x: x[1].velocity)
+
+                    # How many inner notes can we keep?
+                    # Total = 2 (lowest + highest) + kept_inner = max_chord_notes
+                    max_inner = max_chord_notes - 2
+                    # Delete the quietest inner notes beyond the budget
+                    for i, _n in inner[:len(inner) - max_inner]:
+                        notes_to_remove.add(i)
+                else:
+                    active_ids.discard(note_idx)
+
+            removed = len(notes_to_remove)
+            total_removed += removed
+            if removed > 0:
+                instrument.notes = [
+                    n for idx, n in enumerate(instrument.notes)
+                    if idx not in notes_to_remove
+                ]
+
+        if total_removed > 0:
+            from src.utils.logger import get_logger
+            get_logger(__name__).debug(
+                f"Rule 2 (Polyphony Choke): removed {total_removed} "
+                f"excess inner notes from overstuffed chords"
+            )
+
+        return midi
+
+    @staticmethod
+    def filter_reverb_shadow(
+        midi: pretty_midi.PrettyMIDI,
+        shadow_vel_threshold: int = 45,
+        loud_vel_threshold: int = 70,
+        shadow_window_ms: float = 200.0,
+    ) -> pretty_midi.PrettyMIDI:
+        """Rule 3 — Reverb Shadow Filter.
+
+        Sometimes a loud chord is played, and ~200ms later the AI spits
+        out a tiny, quiet stray note.  This is because the AI is hearing
+        the echo of the chord bouncing off the walls of the recording
+        studio.
+
+        For each quiet note (velocity < ``shadow_vel_threshold``):
+        look backward in time for any note that **ended** within
+        ``shadow_window_ms`` and had velocity > ``loud_vel_threshold``.
+        If such a loud "parent" note exists, the quiet note lives in
+        its reverb shadow — delete it.
+
+        This runs **before** velocity normalization so the raw AI
+        velocities are available.
+
+        Args:
+            midi: Input PrettyMIDI object.
+            shadow_vel_threshold: Velocity ceiling for a "quiet" note
+                that is a candidate for shadow deletion. Default 45.
+            loud_vel_threshold: Velocity floor for a "loud" note that
+                can cast a reverb shadow. Default 70.
+            shadow_window_ms: Maximum time window in milliseconds to
+                look backward from the quiet note's start for a loud
+                parent. Default 200ms.
+
+        Returns:
+            The same PrettyMIDI object with reverb shadow ghosts removed.
+        """
+        shadow_window_sec = shadow_window_ms / 1000.0
+        total_removed = 0
+
+        for instrument in midi.instruments:
+            if not instrument.notes:
+                continue
+
+            # Sort all notes by start time for efficient scanning
+            sorted_notes = sorted(instrument.notes, key=lambda n: n.start)
+
+            # Pre-compute the set of "loud" notes for fast shadow casting
+            # We check if ANY loud note ended within the shadow window
+            # before the quiet note starts.
+            loud_notes = [
+                n for n in sorted_notes if n.velocity > loud_vel_threshold
+            ]
+
+            surviving: list[pretty_midi.Note] = []
+            for note in sorted_notes:
+                # Only quiet notes can be shadow candidates
+                if note.velocity < shadow_vel_threshold:
+                    # Check if this quiet note lives in a reverb shadow
+                    is_shadow = False
+                    for loud in loud_notes:
+                        # The loud note must have ended BEFORE this note starts
+                        # but within the shadow window
+                        time_gap = note.start - loud.end
+                        if 0 <= time_gap <= shadow_window_sec:
+                            is_shadow = True
+                            break
+                        # Also catch cases where the loud note is still
+                        # sounding when the quiet ghost appears
+                        if loud.start <= note.start <= loud.end:
+                            time_gap_from_start = note.start - loud.start
+                            if time_gap_from_start > 0:
+                                is_shadow = True
+                                break
+
+                    if is_shadow:
+                        total_removed += 1
+                        continue
+
+                surviving.append(note)
+
+            instrument.notes = surviving
+
+        if total_removed > 0:
+            from src.utils.logger import get_logger
+            get_logger(__name__).debug(
+                f"Rule 3 (Reverb Shadow): removed {total_removed} "
+                f"quiet notes living in the shadow of loud chords"
+            )
+
+        return midi
+

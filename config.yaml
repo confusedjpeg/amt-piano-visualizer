@@ -49,6 +49,14 @@ playability:
     - "M3"                    # Major 3rd
     - "m3"                    # Minor 3rd
 
+# ── Ghost Note Pruning (Strict Post-Transcription Cleanup) ──
+ghost_note_pruning:
+  min_duration_ms: 80.0           # Rule 1: Notes shorter than 80ms are always deleted (AI blips)
+  max_chord_notes: 4              # Rule 2: Max simultaneous notes per channel before choking
+  shadow_vel_threshold: 45        # Rule 3: Quiet notes below this are reverb shadow candidates
+  loud_vel_threshold: 70          # Rule 3: A preceding note must exceed this to cast a shadow
+  shadow_window_ms: 200.0         # Rule 3: Look-back window (ms) for a loud "parent" note
+
 # ── Step 5: MIDIVisualizer ──
 video:
   midi_visualizer_path: "MIDIVisualizer"  # Must be on PATH or absolute

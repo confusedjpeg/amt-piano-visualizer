@@ -83,6 +83,30 @@ class PlayabilityConfig(BaseModel):
     pruning_priority: list[str] = Field(default=["P5", "M3", "m3"])
 
 
+# ── Ghost Note Pruning (Strict Post-Transcription Cleanup) ───────────────────
+
+class GhostNotePruningConfig(BaseModel):
+    """Configuration for the strict ghost note pruning algorithm.
+
+    Three surgical rules that eliminate AI-hallucinated micro-transients,
+    overtone-stuffed chords, and reverb echo ghosts from transcribed MIDI.
+    """
+
+    # Rule 1: Minimum Duration Hard Cap
+    # Notes shorter than this are ALWAYS deleted, regardless of velocity.
+    min_duration_ms: float = 80.0
+
+    # Rule 2: Polyphony Choke (Chord Thinner)
+    # Max simultaneous notes per channel before choking by velocity.
+    max_chord_notes: int = 4
+
+    # Rule 3: Reverb Shadow Filter
+    # A quiet note following a loud note within the shadow window is deleted.
+    shadow_vel_threshold: int = 45   # Quiet note ceiling
+    loud_vel_threshold: int = 70     # Loud "parent" note floor
+    shadow_window_ms: float = 200.0  # Look-back window in ms
+
+
 # ── Step 5: Video Rendering ──────────────────────────────────────────────────
 
 class VideoConfig(BaseModel):
@@ -112,6 +136,7 @@ class PipelineConfig(BaseModel):
     piano_transcription: PianoTranscriptionConfig = PianoTranscriptionConfig()
     arranger: ArrangerConfig = ArrangerConfig()
     playability: PlayabilityConfig = PlayabilityConfig()
+    ghost_note_pruning: GhostNotePruningConfig = GhostNotePruningConfig()
     video: VideoConfig = VideoConfig()
 
     @classmethod
