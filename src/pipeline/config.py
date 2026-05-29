@@ -83,6 +83,25 @@ class PlayabilityConfig(BaseModel):
     pruning_priority: list[str] = Field(default=["P5", "M3", "m3"])
 
 
+# ── Post-Processing (Chord Quantization + Legato) ───────────────────────────
+
+class PostProcessingConfig(BaseModel):
+    """Configuration for tempo-aware MIDI post-processing.
+
+    Controls the chord quantization grid and the legato stretching mode.
+    """
+
+    # When True, use aggressive "Chord Snapper" legato: every note is
+    # stretched to meet the next chord change, capped at max_duration_s.
+    # When False, use the conservative "Smart Legato" that only fills
+    # gaps smaller than an 8th note (preserving intentional rests).
+    aggressive_legato: bool = True
+
+    # Absolute cap on how far any note can be stretched (seconds).
+    # Only used in aggressive mode.  Prevents infinite ringing.
+    aggressive_legato_max_duration_s: float = 2.0
+
+
 # ── Ghost Note Pruning (Strict Post-Transcription Cleanup) ───────────────────
 
 class GhostNotePruningConfig(BaseModel):
@@ -136,6 +155,7 @@ class PipelineConfig(BaseModel):
     piano_transcription: PianoTranscriptionConfig = PianoTranscriptionConfig()
     arranger: ArrangerConfig = ArrangerConfig()
     playability: PlayabilityConfig = PlayabilityConfig()
+    post_processing: PostProcessingConfig = PostProcessingConfig()
     ghost_note_pruning: GhostNotePruningConfig = GhostNotePruningConfig()
     video: VideoConfig = VideoConfig()
 

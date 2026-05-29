@@ -1,1 +1,1 @@
-"""MIDI processing — cleaning, quantization, playability filtering, and merging."""
+"""MIDI processing — cleaning, quantization, post-processing, playability filtering, and merging."""

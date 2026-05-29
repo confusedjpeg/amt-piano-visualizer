@@ -49,6 +49,12 @@ playability:
     - "M3"                    # Major 3rd
     - "m3"                    # Minor 3rd
 
+# ── Tempo-Aware Post-Processing (Chord Snapper + Legato) ──
+post_processing:
+  aggressive_legato: true             # true = Chord Snapper (stretch every note to next chord)
+                                      # false = Smart Legato (only fill small gaps, preserve rests)
+  aggressive_legato_max_duration_s: 2.0  # Max seconds any note can be stretched (prevents infinite ring)
+
 # ── Ghost Note Pruning (Strict Post-Transcription Cleanup) ──
 ghost_note_pruning:
   min_duration_ms: 80.0           # Rule 1: Notes shorter than 80ms are always deleted (AI blips)

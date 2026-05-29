@@ -21,6 +21,7 @@ from src.audio.separator import StemSeparator
 from src.midi.cleaner import MidiCleaner
 from src.midi.merger import MidiMerger
 from src.midi.playability import PlayabilityFilter
+from src.midi.post_processor import post_process_midi
 from src.midi.quantizer import Quantizer
 from src.pipeline.config import PipelineConfig
 from src.pipeline.errors import PipelineError
@@ -257,7 +258,16 @@ class PipelineOrchestrator:
             # Standard quality improvements
             acc_midi = self._cleaner.filter_short_notes(acc_midi, min_duration_ms=50.0)
             acc_midi = self._cleaner.normalize_velocities(acc_midi, min_vel=60, max_vel=100)
-            acc_midi = self._cleaner.apply_legato(acc_midi, extend_ms=50.0)
+
+            # Tempo-Aware Post-Processing (replaces the old hardcoded legato)
+            # Uses the instrumental audio stem for BPM extraction so the
+            # grid math adapts to the song's actual tempo.
+            bpm_audio_source = gated_path if has_piano else instrumental_path
+            acc_midi = post_process_midi(
+                acc_midi,
+                bpm_audio_source,
+                config=self._config.post_processing,
+            )
 
             # Assign to Left Hand channel
             acc_midi = self._cleaner.assign_channel(acc_midi, channel=1)
