@@ -150,6 +150,14 @@ class PipelineOrchestrator:
                 vocals_midi = self._cleaner.assign_channel(vocals_midi, channel=0)
                 vocals_midi = self._cleaner.set_instrument(vocals_midi, program=0)
 
+                # Tempo-aware post-processing (quantize + legato) for
+                # grid-aligned visual sync with the accompaniment
+                vocals_midi = post_process_midi(
+                    vocals_midi,
+                    audio_path,
+                    config=self._config.post_processing,
+                )
+
                 vocals_midi_path = run_dir / "vocals_cleaned.mid"
                 vocals_midi.write(str(vocals_midi_path))
                 steps_completed.append("vocal_transcription")

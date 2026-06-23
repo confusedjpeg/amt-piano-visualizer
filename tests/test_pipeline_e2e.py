@@ -197,3 +197,96 @@ class TestIdempotency:
         ]
 
         assert first_notes == second_notes
+
+
+class TestVocalMidiPostProcessing:
+    """Verify vocal MIDI receives tempo-aware post-processing."""
+
+    def test_vocals_are_quantized(self, tmp_path, pipeline_config):
+        """Vocal MIDI output should have grid-aligned note starts."""
+        import shutil
+        from pathlib import Path
+
+        import numpy as np
+        import pretty_midi
+        import soundfile as sf
+
+        # Create a minimal test audio file (800ms sine wave)
+        audio_path = tmp_path / "input.wav"
+        sr, dur = 22050, 0.8
+        t = np.linspace(0, dur, int(sr * dur), endpoint=False)
+        sf.write(str(audio_path), 0.5 * np.sin(2 * np.pi * 440 * t), sr)
+
+        # Create a vocal MIDI with off-grid notes (0.031s = ~1ms offset)
+        raw_vocals_midi = pretty_midi.PrettyMIDI(initial_tempo=120.0)
+        inst = pretty_midi.Instrument(program=0, name="Vocals")
+        inst.notes.append(pretty_midi.Note(velocity=80, pitch=60, start=0.031, end=0.5))
+        inst.notes.append(pretty_midi.Note(velocity=80, pitch=64, start=0.531, end=0.8))
+        raw_vocals_midi.instruments.append(inst)
+        vocals_path = tmp_path / "raw_vocals.mid"
+        raw_vocals_midi.write(str(vocals_path))
+
+        # Mock the heavy modules
+        from src.pipeline.models import StemResult
+
+        def mock_separate(_self, audio_path, run_dir):
+            run_dir = Path(run_dir)
+            sr_dem = 44100
+            dur_dem = 0.81
+            ts = np.linspace(0, dur_dem, int(sr_dem * dur_dem), endpoint=False)
+            silent = (0.01 * np.sin(2 * np.pi * 220 * ts)).astype(np.float32)
+            for name in ("vocals", "bass", "drums", "other"):
+                sf.write(str(run_dir / f"{name}.wav"), silent, sr_dem)
+            return StemResult(
+                vocals_path=run_dir / "vocals.wav",
+                bass_path=run_dir / "bass.wav",
+                drums_path=run_dir / "drums.wav",
+                other_path=run_dir / "other.wav",
+            )
+
+        def mock_transcribe(_self, _audio, out_path):
+            shutil.copy2(str(vocals_path), str(out_path))
+            return Path(out_path)
+
+        def mock_arrange(_self, _audio, out_path, **_kw):
+            empty = pretty_midi.PrettyMIDI(initial_tempo=120.0)
+            empty.write(str(out_path))
+            return Path(out_path)
+
+        from src.pipeline.orchestrator import PipelineOrchestrator
+        import src.audio.separator
+        import src.transcription.vocal_transcriber
+        import src.arranger.arranger
+
+        with patch.object(
+            src.audio.separator.StemSeparator, "separate", mock_separate
+        ):
+            with patch.object(
+                src.transcription.vocal_transcriber.VocalTranscriber,
+                "transcribe", mock_transcribe,
+            ):
+                with patch.object(
+                    src.arranger.arranger.AlgorithmicArranger,
+                    "arrange", mock_arrange,
+                ):
+                    orch = PipelineOrchestrator(pipeline_config)
+                    result = orch.run(
+                        audio_path=audio_path,
+                        include_vocals=True,
+                        has_piano=False,
+                    )
+
+        # Find the vocals_cleaned.mid file
+        intermediate_dir = tmp_path / "intermediate"
+        candidates = list(intermediate_dir.rglob("vocals_cleaned.mid"))
+        assert len(candidates) > 0, "vocals_cleaned.mid not found"
+        post_vocals_path = candidates[0]
+
+        processed = pretty_midi.PrettyMIDI(str(post_vocals_path))
+        assert len(processed.instruments) > 0
+        for note in processed.instruments[0].notes:
+            remainder = round(note.start % 0.125, 10)
+            assert remainder < 1e-4 or abs(remainder - 0.125) < 1e-4, (
+                f"Vocal note at {note.start} not on grid "
+                f"(remainder={remainder})"
+            )
