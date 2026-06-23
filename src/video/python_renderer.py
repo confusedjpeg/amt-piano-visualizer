@@ -167,14 +167,15 @@ class PythonVideoRenderer:
         """
         Render the Synthesia-style video using pure Python.
 
-        The audio track comes from the original input audio when available.
-        Falls back to synthesized MIDI piano audio if the original is
-        missing or cannot be read.  Falls back to no audio if both fail.
+        The audio track is synthesized from the MIDI file (piano playing
+        the same notes that fall on screen).  The original input song is
+        NOT used — a Synthesia video must sound like piano, not like the
+        original artist.
 
         Args:
             midi_path: Path to final_playable.mid.
-            audio_path: Path to original audio file (used as primary audio
-                source when available).
+            audio_path: Path to original audio file (unused — kept for
+                API compatibility with VideoRendererProtocol).
             output_path: Path for the output MP4 file.
             timeout: Maximum time in seconds (unused, kept for API compat).
 
@@ -224,46 +225,30 @@ class PythonVideoRenderer:
 
             clip = VideoClip(make_frame, duration=duration)
 
-            # ── Audio source selection ──────────────────────────────────
-            # Priority: original input audio > synthesized MIDI piano > no audio
+            # ── Audio source ─────────────────────────────────────────────
+            # For a Synthesia-style video, the audio MUST be the piano
+            # playing the same notes that are falling on screen.  We
+            # synthesize it from the final MIDI.  The original input song
+            # is deliberately NOT used — it would not match the visuals.
             audio_attached = False
-
-            # 1. Try original input audio
-            audio_path = Path(audio_path)
-            if audio_path.exists():
+            synth_audio_path = self._synthesize_midi_audio(pm, output_path)
+            if synth_audio_path and synth_audio_path.exists():
                 try:
-                    audio_clip = AudioFileClip(str(audio_path))
+                    audio_clip = AudioFileClip(str(synth_audio_path))
                     clip = clip.with_audio(audio_clip)
                     audio_attached = True
-                    log.info(f"Using original audio: {audio_path}")
-                except Exception as orig_exc:
+                    log.info("Attached synthesized piano audio (matches MIDI notes)")
+                except Exception as synth_exc:
                     log.warning(
-                        f"Could not read original audio ({audio_path}): "
-                        f"{orig_exc}. Falling back to synthesized audio."
+                        f"Could not attach synthesized audio: {synth_exc}"
                     )
-            else:
-                log.info(
-                    f"Original audio not found at {audio_path}. "
-                    f"Will synthesize from MIDI instead."
+
+            if not audio_attached:
+                log.warning(
+                    "No piano audio available — rendering silent video. "
+                    "(The original input song is intentionally NOT used; "
+                    "it would not match the falling notes.)"
                 )
-
-            # 2. Fall back to synthesized MIDI audio
-            if not audio_attached:
-                synth_audio_path = self._synthesize_midi_audio(pm, output_path)
-                if synth_audio_path and synth_audio_path.exists():
-                    try:
-                        audio_clip = AudioFileClip(str(synth_audio_path))
-                        clip = clip.with_audio(audio_clip)
-                        audio_attached = True
-                        log.info("Attached synthesized MIDI audio")
-                    except Exception as synth_exc:
-                        log.warning(
-                            f"Could not attach synthesized audio: {synth_exc}"
-                        )
-
-            # 3. Render without audio (last resort)
-            if not audio_attached:
-                log.warning("No audio source available — rendering silent video.")
 
             log.info(f"Writing video to {output_path}...")
             clip.write_videofile(

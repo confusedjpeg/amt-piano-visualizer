@@ -35,9 +35,14 @@ class VideoRenderer:
         """
         Render the Synthesia-style video.
 
+        MIDIVisualizer synthesizes piano audio from the MIDI file
+        automatically.  The original input song is NOT used — a
+        Synthesia video must sound like piano, not the original artist.
+
         Args:
             midi_path: Path to final_playable.mid.
-            audio_path: Path to original audio file (for audio track sync).
+            audio_path: Path to original audio file (unused — kept for
+                API compatibility with VideoRendererProtocol).
             output_path: Path for the output MP4 file.
             timeout: Maximum time in seconds to wait for rendering.
 
@@ -45,7 +50,7 @@ class VideoRenderer:
             Path to the rendered MP4 video.
 
         Raises:
-            FileNotFoundError: If MIDIVisualizer binary or input files are not found.
+            FileNotFoundError: If MIDIVisualizer binary or MIDI file not found.
             RenderingError: If the subprocess exits with a non-zero code.
         """
         midi_path = Path(midi_path)
@@ -57,16 +62,13 @@ class VideoRenderer:
         self._validate_binary()
         if not midi_path.exists():
             raise FileNotFoundError(f"MIDI file not found: {midi_path}")
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        # audio_path is not used for rendering — a Synthesia video
+        # must play piano audio synthesized from the MIDI, not the
+        # original song.  MIDIVisualizer synthesizes from the MIDI
+        # automatically when no --audio flag is passed.
 
-        # Try rendering with audio flag first
-        try:
-            self._render_with_audio(midi_path, audio_path, output_path, timeout)
-        except RenderingError:
-            log.info("MIDIVisualizer --audio flag not supported; using FFmpeg fallback.")
-            self._render_without_audio(midi_path, output_path, timeout)
-            self._mux_audio_ffmpeg(output_path, audio_path)
+        # Render video (MIDIVisualizer synthesizes piano audio from MIDI)
+        self._render_without_audio(midi_path, output_path, timeout)
 
         # Validate output
         if not output_path.exists() or output_path.stat().st_size == 0:
@@ -112,12 +114,10 @@ class VideoRenderer:
         output_path: Path,
         timeout: int,
     ) -> None:
-        """Render video without audio (for FFmpeg fallback)."""
-        # Render to a temporary file, then we'll mux audio with FFmpeg
-        temp_video = output_path.with_suffix(".noaudio.mp4")
-        cmd = self._build_command(midi_path, temp_video)
+        """Render video — MIDIVisualizer synthesizes piano audio from MIDI."""
+        cmd = self._build_command(midi_path, output_path)
 
-        log.info(f"Running MIDIVisualizer (no audio): {' '.join(cmd)}")
+        log.info(f"Running MIDIVisualizer: {' '.join(cmd)}")
         result = subprocess.run(
             cmd,
             capture_output=True,

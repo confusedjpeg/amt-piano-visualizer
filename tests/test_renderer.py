@@ -70,19 +70,25 @@ class TestVideoRenderer:
                     tmp_path / "output.mp4",
                 )
 
-    def test_missing_audio_raises(self, tmp_path):
-        """Non-existent audio file should raise FileNotFoundError."""
+    def test_missing_audio_is_ok(self, tmp_path):
+        """Audio path is not required — Synthesia synthesizes from MIDI."""
         renderer = self._make_renderer()
         midi = tmp_path / "test.mid"
         midi.write_bytes(b"fake")
 
         with patch.object(renderer, "_validate_binary"):
-            with pytest.raises(FileNotFoundError, match="Audio file"):
-                renderer.render(
+            with patch("subprocess.run") as mock_subprocess:
+                output = tmp_path / "output.mp4"
+                def fake_run(*a, **k):
+                    output.write_bytes(b"video")
+                    return MagicMock(returncode=0)
+                mock_subprocess.side_effect = fake_run
+                result = renderer.render(
                     midi,
                     tmp_path / "nonexistent.wav",
-                    tmp_path / "output.mp4",
+                    output,
                 )
+                assert result == output
 
     def test_build_command_format(self):
         """Command should contain expected flags and values."""
@@ -186,44 +192,15 @@ class TestPythonVideoRenderer:
             fake_moviepy.AudioFileClip = mock_audio_cls
         return patch.dict("sys.modules", {"moviepy": fake_moviepy})
 
-    def test_uses_original_audio_when_present(self, tmp_path):
-        """Python renderer should mux the original audio when available."""
+    def test_uses_synthesized_piano_audio_not_original_song(self, tmp_path):
+        """Python renderer must synthesize piano audio from MIDI, NOT use original song."""
         renderer = self._make_renderer()
         midi = tmp_path / "test.mid"
         _make_test_midi(midi)
-        audio = tmp_path / "original.wav"
-        audio.write_bytes(b"fake_audio")
-        output = tmp_path / "output.mp4"
-
-        mock_clip_cls = MagicMock()
-        mock_clip = MagicMock()
-        mock_clip_cls.return_value = mock_clip
-        mock_clip.with_audio.return_value = mock_clip
-        mock_clip.write_videofile = MagicMock(
-            side_effect=lambda *a, **k: output.write_bytes(b"video")
-        )
-        mock_audio_cls = MagicMock()
-        mock_audio = MagicMock()
-        mock_audio_cls.return_value = mock_audio
-
-        with patch(
-            "src.video.python_renderer.PythonVideoRenderer._synthesize_midi_audio"
-        ) as mock_synth:
-            with self._patch_moviepy(mock_clip_cls, mock_audio_cls):
-                result = renderer.render(midi, audio, output)
-
-        assert result == output
-        mock_audio_cls.assert_called_once_with(str(audio))
-        mock_clip.with_audio.assert_called_once_with(mock_audio)
-        mock_synth.assert_not_called()
-
-    def test_falls_back_to_synthesized_audio_when_missing(self, tmp_path):
-        """Python renderer should synthesize MIDI audio when original is missing."""
-        renderer = self._make_renderer()
-        midi = tmp_path / "test.mid"
-        _make_test_midi(midi)
+        original_song = tmp_path / "original.wav"
+        original_song.write_bytes(b"fake_song_audio")  # exists but must NOT be used
         synth_path = tmp_path / "output.synth.wav"
-        synth_path.write_bytes(b"fake_synth")
+        synth_path.write_bytes(b"fake_piano_synth")
         output = tmp_path / "output.mp4"
 
         mock_clip_cls = MagicMock()
@@ -242,19 +219,51 @@ class TestPythonVideoRenderer:
             return_value=synth_path,
         ) as mock_synth:
             with self._patch_moviepy(mock_clip_cls, mock_audio_cls):
-                result = renderer.render(
-                    midi,
-                    tmp_path / "nonexistent.wav",
-                    output,
-                )
+                result = renderer.render(midi, original_song, output)
 
         assert result == output
+        # Synthesized piano audio must be created and used
         mock_synth.assert_called_once()
+        # AudioFileClip must be called with the SYNTH path, NOT the original song
         mock_audio_cls.assert_called_once_with(str(synth_path))
         mock_clip.with_audio.assert_called_once_with(mock_audio)
 
-    def test_logs_warning_when_audio_missing(self, tmp_path):
-        """A clear warning should be logged when falling back to synthesized audio."""
+    def test_original_song_audio_is_never_used(self, tmp_path):
+        """Even when original song exists, only synthesized piano audio is attached."""
+        renderer = self._make_renderer()
+        midi = tmp_path / "test.mid"
+        _make_test_midi(midi)
+        original_song = tmp_path / "song.mp3"
+        original_song.write_bytes(b"original_song_data")
+        synth_path = tmp_path / "output.synth.wav"
+        synth_path.write_bytes(b"piano_synth")
+        output = tmp_path / "output.mp4"
+
+        mock_clip_cls = MagicMock()
+        mock_clip = MagicMock()
+        mock_clip_cls.return_value = mock_clip
+        mock_clip.with_audio.return_value = mock_clip
+        mock_clip.write_videofile = MagicMock(
+            side_effect=lambda *a, **k: output.write_bytes(b"video")
+        )
+        mock_audio_cls = MagicMock()
+        mock_audio_cls.return_value = MagicMock()
+
+        with patch(
+            "src.video.python_renderer.PythonVideoRenderer._synthesize_midi_audio",
+            return_value=synth_path,
+        ):
+            with self._patch_moviepy(mock_clip_cls, mock_audio_cls):
+                renderer.render(midi, original_song, output)
+
+        # AudioFileClip must NOT be called with the original song path
+        called_paths = [str(call.args[0]) if call.args else str(call) 
+                        for call in mock_audio_cls.call_args_list]
+        assert not any(str(original_song) == p for p in called_paths), \
+            "Original song audio was used — should only use synthesized piano audio"
+
+    def test_logs_warning_when_synth_fails(self, tmp_path):
+        """A clear warning should be logged when piano audio synthesis fails."""
         from loguru import logger
         import io
 
@@ -270,7 +279,6 @@ class TestPythonVideoRenderer:
             side_effect=lambda *a, **k: output.write_bytes(b"video")
         )
 
-        # Capture loguru output
         log_stream = io.StringIO()
         sink_id = logger.add(log_stream, format="{message}", level="INFO")
 
@@ -289,7 +297,7 @@ class TestPythonVideoRenderer:
             logger.remove(sink_id)
 
         log_text = log_stream.getvalue().lower()
-        assert "will synthesize from midi instead" in log_text
+        assert "silent video" in log_text or "no piano audio" in log_text
 
     def test_empty_midi_raises(self, tmp_path):
         """A MIDI with no notes should raise RenderingError."""
