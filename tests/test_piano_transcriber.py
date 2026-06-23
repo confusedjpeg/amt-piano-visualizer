@@ -26,16 +26,16 @@ class TestPianoTranscriber:
         with pytest.raises(FileNotFoundError):
             pt.transcribe(tmp_path / "missing.wav", tmp_path / "out.mid")
 
-    @patch("src.transcription.piano_transcriber.PianoTranscriber._run_transcription")
+    @patch("src.transcription.piano_transcriber.PianoTranscriber._run_basic_pitch")
     def test_empty_output_warns(self, mock_run, tmp_path):
         """Empty MIDI output should log a warning but not crash."""
-        # Create a valid empty MIDI at the output path
-        def fake_transcribe(audio_path, output_path):
+        # _run_basic_pitch returns a PrettyMIDI; return an empty one
+        def fake_transcribe(audio_path):
             empty_midi = pretty_midi.PrettyMIDI(initial_tempo=120.0)
             empty_midi.instruments.append(
                 pretty_midi.Instrument(program=0, name="Piano")
             )
-            empty_midi.write(str(output_path))
+            return empty_midi
 
         mock_run.side_effect = fake_transcribe
 
@@ -46,10 +46,10 @@ class TestPianoTranscriber:
         result = pt.transcribe(audio_path, tmp_path / "out.mid")
         assert result.exists()
 
-    @patch("src.transcription.piano_transcriber.PianoTranscriber._run_transcription")
+    @patch("src.transcription.piano_transcriber.PianoTranscriber._run_basic_pitch")
     def test_polyphony_preserved(self, mock_run, tmp_path):
         """Piano transcription should preserve polyphonic output."""
-        def fake_transcribe(audio_path, output_path):
+        def fake_transcribe(audio_path):
             midi = pretty_midi.PrettyMIDI(initial_tempo=120.0)
             inst = pretty_midi.Instrument(program=0, name="Piano")
             # C major chord — 3 simultaneous notes
@@ -58,7 +58,7 @@ class TestPianoTranscriber:
                     pretty_midi.Note(velocity=80, pitch=pitch, start=0.0, end=1.0)
                 )
             midi.instruments.append(inst)
-            midi.write(str(output_path))
+            return midi
 
         mock_run.side_effect = fake_transcribe
 
@@ -72,10 +72,10 @@ class TestPianoTranscriber:
         total_notes = sum(len(i.notes) for i in result_midi.instruments)
         assert total_notes == 3
 
-    @patch("src.transcription.piano_transcriber.PianoTranscriber._run_transcription")
+    @patch("src.transcription.piano_transcriber.PianoTranscriber._run_basic_pitch")
     def test_sustain_pedal_preserved(self, mock_run, tmp_path):
         """CC64 (sustain pedal) control changes should be preserved."""
-        def fake_transcribe(audio_path, output_path):
+        def fake_transcribe(audio_path):
             midi = pretty_midi.PrettyMIDI(initial_tempo=120.0)
             inst = pretty_midi.Instrument(program=0, name="Piano")
             inst.notes.append(
@@ -89,7 +89,7 @@ class TestPianoTranscriber:
                 pretty_midi.ControlChange(number=64, value=0, time=0.5)
             )
             midi.instruments.append(inst)
-            midi.write(str(output_path))
+            return midi
 
         mock_run.side_effect = fake_transcribe
 
@@ -103,8 +103,3 @@ class TestPianoTranscriber:
         cc_events = result_midi.instruments[0].control_changes
         cc64_events = [cc for cc in cc_events if cc.number == 64]
         assert len(cc64_events) == 2
-
-    def test_device_resolution(self):
-        """Device 'auto' should resolve to 'cpu' or 'cuda'."""
-        device = PianoTranscriber._resolve_device("auto")
-        assert device in ("cpu", "cuda")
