@@ -472,33 +472,43 @@ class MidiCleaner:
             # Sort all notes by start time for efficient scanning
             sorted_notes = sorted(instrument.notes, key=lambda n: n.start)
 
-            # Pre-compute the set of "loud" notes for fast shadow casting
-            # We check if ANY loud note ended within the shadow window
-            # before the quiet note starts.
+            # Pre-compute the list of "loud" notes for shadow casting
             loud_notes = [
                 n for n in sorted_notes if n.velocity > loud_vel_threshold
             ]
+            if not loud_notes:
+                continue
 
             surviving: list[pretty_midi.Note] = []
+            loud_idx = 0  # sliding pointer into loud_notes
+
             for note in sorted_notes:
-                # Only quiet notes can be shadow candidates
                 if note.velocity < shadow_vel_threshold:
-                    # Check if this quiet note lives in a reverb shadow
+                    # Advance past loud notes that ended too long ago
+                    while (
+                        loud_idx < len(loud_notes)
+                        and loud_notes[loud_idx].end
+                        < note.start - shadow_window_sec
+                    ):
+                        loud_idx += 1
+
+                    # Check remaining loud notes within the window
                     is_shadow = False
-                    for loud in loud_notes:
-                        # The loud note must have ended BEFORE this note starts
-                        # but within the shadow window
-                        time_gap = note.start - loud.end
-                        if 0 <= time_gap <= shadow_window_sec:
+                    for j in range(loud_idx, len(loud_notes)):
+                        loud = loud_notes[j]
+                        time_since_loud_end = note.start - loud.end
+                        if time_since_loud_end > shadow_window_sec:
+                            # Past the window — no later loud notes can
+                            # match either (they start even later)
+                            break
+                        if 0 <= time_since_loud_end:
                             is_shadow = True
                             break
                         # Also catch cases where the loud note is still
                         # sounding when the quiet ghost appears
                         if loud.start <= note.start <= loud.end:
-                            time_gap_from_start = note.start - loud.start
-                            if time_gap_from_start > 0:
-                                is_shadow = True
-                                break
+                            is_shadow = True
+                            break
 
                     if is_shadow:
                         total_removed += 1
