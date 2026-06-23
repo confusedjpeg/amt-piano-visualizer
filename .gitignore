@@ -16,8 +16,14 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Project-specific ignored data directories
-# We keep the directory structures but ignore individual run files, mp3s, or midi files.
+# Large binary assets (downloaded at setup time, not tracked in git)
+assets/fluidsynth/
+assets/*.sf2
+assets/*.zip
+
+# Run output artifacts in project root
+run_*.mp4
+run_*.wav
 data/input/*
 !data/input/.gitkeep
 

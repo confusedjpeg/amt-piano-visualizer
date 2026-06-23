@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -177,29 +178,118 @@ class TestPythonVideoRenderer:
                 tmp_path / "output.mp4",
             )
 
-    def test_audio_path_is_ignored(self, tmp_path):
-        """Python renderer should not raise for a missing audio_path
-        (it synthesizes audio from MIDI instead)."""
+    def _patch_moviepy(self, mock_clip_cls, mock_audio_cls=None):
+        """Return a context manager that stubs out the moviepy module."""
+        fake_moviepy = MagicMock()
+        fake_moviepy.VideoClip = mock_clip_cls
+        if mock_audio_cls is not None:
+            fake_moviepy.AudioFileClip = mock_audio_cls
+        return patch.dict("sys.modules", {"moviepy": fake_moviepy})
+
+    def test_uses_original_audio_when_present(self, tmp_path):
+        """Python renderer should mux the original audio when available."""
         renderer = self._make_renderer()
         midi = tmp_path / "test.mid"
         _make_test_midi(midi)
+        audio = tmp_path / "original.wav"
+        audio.write_bytes(b"fake_audio")
+        output = tmp_path / "output.mp4"
 
-        # audio_path doesn't exist — should NOT raise
-        # (will fail later at moviepy stage, but the audio_path itself is unused)
-        with patch("src.video.python_renderer.PythonVideoRenderer._synthesize_midi_audio", return_value=None):
-            with patch("moviepy.VideoClip") as mock_clip_cls:
-                mock_clip = MagicMock()
-                mock_clip_cls.return_value = mock_clip
-                mock_clip.write_videofile = MagicMock()
-                # Simulate output file creation
-                output = tmp_path / "output.mp4"
-                mock_clip.write_videofile.side_effect = lambda *a, **k: output.write_bytes(b"video")
+        mock_clip_cls = MagicMock()
+        mock_clip = MagicMock()
+        mock_clip_cls.return_value = mock_clip
+        mock_clip.with_audio.return_value = mock_clip
+        mock_clip.write_videofile = MagicMock(
+            side_effect=lambda *a, **k: output.write_bytes(b"video")
+        )
+        mock_audio_cls = MagicMock()
+        mock_audio = MagicMock()
+        mock_audio_cls.return_value = mock_audio
 
+        with patch(
+            "src.video.python_renderer.PythonVideoRenderer._synthesize_midi_audio"
+        ) as mock_synth:
+            with self._patch_moviepy(mock_clip_cls, mock_audio_cls):
+                result = renderer.render(midi, audio, output)
+
+        assert result == output
+        mock_audio_cls.assert_called_once_with(str(audio))
+        mock_clip.with_audio.assert_called_once_with(mock_audio)
+        mock_synth.assert_not_called()
+
+    def test_falls_back_to_synthesized_audio_when_missing(self, tmp_path):
+        """Python renderer should synthesize MIDI audio when original is missing."""
+        renderer = self._make_renderer()
+        midi = tmp_path / "test.mid"
+        _make_test_midi(midi)
+        synth_path = tmp_path / "output.synth.wav"
+        synth_path.write_bytes(b"fake_synth")
+        output = tmp_path / "output.mp4"
+
+        mock_clip_cls = MagicMock()
+        mock_clip = MagicMock()
+        mock_clip_cls.return_value = mock_clip
+        mock_clip.with_audio.return_value = mock_clip
+        mock_clip.write_videofile = MagicMock(
+            side_effect=lambda *a, **k: output.write_bytes(b"video")
+        )
+        mock_audio_cls = MagicMock()
+        mock_audio = MagicMock()
+        mock_audio_cls.return_value = mock_audio
+
+        with patch(
+            "src.video.python_renderer.PythonVideoRenderer._synthesize_midi_audio",
+            return_value=synth_path,
+        ) as mock_synth:
+            with self._patch_moviepy(mock_clip_cls, mock_audio_cls):
                 result = renderer.render(
                     midi,
-                    tmp_path / "nonexistent.wav",  # doesn't exist — should be fine
+                    tmp_path / "nonexistent.wav",
                     output,
                 )
+
+        assert result == output
+        mock_synth.assert_called_once()
+        mock_audio_cls.assert_called_once_with(str(synth_path))
+        mock_clip.with_audio.assert_called_once_with(mock_audio)
+
+    def test_logs_warning_when_audio_missing(self, tmp_path):
+        """A clear warning should be logged when falling back to synthesized audio."""
+        from loguru import logger
+        import io
+
+        renderer = self._make_renderer()
+        midi = tmp_path / "test.mid"
+        _make_test_midi(midi)
+        output = tmp_path / "output.mp4"
+
+        mock_clip_cls = MagicMock()
+        mock_clip = MagicMock()
+        mock_clip_cls.return_value = mock_clip
+        mock_clip.write_videofile = MagicMock(
+            side_effect=lambda *a, **k: output.write_bytes(b"video")
+        )
+
+        # Capture loguru output
+        log_stream = io.StringIO()
+        sink_id = logger.add(log_stream, format="{message}", level="INFO")
+
+        try:
+            with patch(
+                "src.video.python_renderer.PythonVideoRenderer._synthesize_midi_audio",
+                return_value=None,
+            ):
+                with self._patch_moviepy(mock_clip_cls):
+                    renderer.render(
+                        midi,
+                        tmp_path / "nonexistent.wav",
+                        output,
+                    )
+        finally:
+            logger.remove(sink_id)
+
+        log_text = log_stream.getvalue().lower()
+        assert "will synthesize from midi instead" in log_text
 
     def test_empty_midi_raises(self, tmp_path):
         """A MIDI with no notes should raise RenderingError."""

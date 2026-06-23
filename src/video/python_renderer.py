@@ -167,14 +167,14 @@ class PythonVideoRenderer:
         """
         Render the Synthesia-style video using pure Python.
 
-        The audio track is synthesized directly from the MIDI file
-        (piano sounds matching the falling notes), NOT from the
-        original input audio.
+        The audio track comes from the original input audio when available.
+        Falls back to synthesized MIDI piano audio if the original is
+        missing or cannot be read.  Falls back to no audio if both fail.
 
         Args:
             midi_path: Path to final_playable.mid.
-            audio_path: Path to original audio file (kept for API
-                compatibility but NOT used — MIDI is synthesized instead).
+            audio_path: Path to original audio file (used as primary audio
+                source when available).
             output_path: Path for the output MP4 file.
             timeout: Maximum time in seconds (unused, kept for API compat).
 
@@ -214,10 +214,8 @@ class PythonVideoRenderer:
         # Sort notes by start time for efficient look-up
         notes.sort(key=lambda n: n.start)
 
-        # Synthesize piano audio from the MIDI
-        synth_audio_path = self._synthesize_midi_audio(pm, output_path)
-
         # Build the video
+        synth_audio_path: Path | None = None
         try:
             from moviepy import VideoClip, AudioFileClip
 
@@ -226,13 +224,46 @@ class PythonVideoRenderer:
 
             clip = VideoClip(make_frame, duration=duration)
 
-            # Attach synthesized MIDI audio
-            if synth_audio_path and synth_audio_path.exists():
+            # ── Audio source selection ──────────────────────────────────
+            # Priority: original input audio > synthesized MIDI piano > no audio
+            audio_attached = False
+
+            # 1. Try original input audio
+            audio_path = Path(audio_path)
+            if audio_path.exists():
                 try:
-                    audio_clip = AudioFileClip(str(synth_audio_path))
+                    audio_clip = AudioFileClip(str(audio_path))
                     clip = clip.with_audio(audio_clip)
-                except Exception as audio_exc:
-                    log.warning(f"Could not attach synthesized audio: {audio_exc}")
+                    audio_attached = True
+                    log.info(f"Using original audio: {audio_path}")
+                except Exception as orig_exc:
+                    log.warning(
+                        f"Could not read original audio ({audio_path}): "
+                        f"{orig_exc}. Falling back to synthesized audio."
+                    )
+            else:
+                log.info(
+                    f"Original audio not found at {audio_path}. "
+                    f"Will synthesize from MIDI instead."
+                )
+
+            # 2. Fall back to synthesized MIDI audio
+            if not audio_attached:
+                synth_audio_path = self._synthesize_midi_audio(pm, output_path)
+                if synth_audio_path and synth_audio_path.exists():
+                    try:
+                        audio_clip = AudioFileClip(str(synth_audio_path))
+                        clip = clip.with_audio(audio_clip)
+                        audio_attached = True
+                        log.info("Attached synthesized MIDI audio")
+                    except Exception as synth_exc:
+                        log.warning(
+                            f"Could not attach synthesized audio: {synth_exc}"
+                        )
+
+            # 3. Render without audio (last resort)
+            if not audio_attached:
+                log.warning("No audio source available — rendering silent video.")
 
             log.info(f"Writing video to {output_path}...")
             clip.write_videofile(
@@ -255,7 +286,7 @@ class PythonVideoRenderer:
                 message=f"Video rendering failed: {exc}"
             ) from exc
         finally:
-            # Clean up temp synthesized audio
+            # Clean up temp synthesized audio (if one was created)
             if synth_audio_path and synth_audio_path.exists():
                 try:
                     synth_audio_path.unlink()
