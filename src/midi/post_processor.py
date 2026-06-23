@@ -283,6 +283,7 @@ def apply_aggressive_legato(
 
     stretched_count = 0
     capped_count = 0
+    untouched_count = 0
 
     for i in range(len(notes)):
         current = notes[i]
@@ -296,20 +297,31 @@ def apply_aggressive_legato(
 
         # ── Aggressive stretch ───────────────────────────────────────
         if next_chord_start is not None:
-            # Drag the note out to meet the next chord
             max_end = current.start + max_note_duration
-            current.end = min(next_chord_start, max_end)
-            stretched_count += 1
+            new_end = min(next_chord_start, max_end)
+
+            if new_end > current.end:
+                # Note end was extended
+                current.end = new_end
+                if new_end == next_chord_start:
+                    stretched_count += 1
+                else:
+                    capped_count += 1
+            else:
+                untouched_count += 1
         else:
             # Last chord group — just apply the duration cap
             duration = current.end - current.start
             if duration > max_note_duration:
                 current.end = current.start + max_note_duration
                 capped_count += 1
+            else:
+                untouched_count += 1
 
     log.info(
-        f"Aggressive legato (Chord Snapper): stretched {stretched_count} notes, "
-        f"capped {capped_count} at {max_note_duration:.3f}s max"
+        f"Aggressive legato (Chord Snapper): stretched {stretched_count}, "
+        f"capped {capped_count}, untouched {untouched_count} notes "
+        f"(max {max_note_duration:.3f}s)"
     )
     return instrument
 
