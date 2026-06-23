@@ -68,6 +68,7 @@ class MidiCleaner:
     def assign_channel(
         midi: pretty_midi.PrettyMIDI,
         channel: int,
+        program: int = 0,
     ) -> pretty_midi.PrettyMIDI:
         """Move all notes into a single Instrument on the specified channel.
 
@@ -76,6 +77,7 @@ class MidiCleaner:
         Args:
             midi: Input PrettyMIDI object.
             channel: Target MIDI channel (0 or 1).
+            program: MIDI program number (default 0 = Acoustic Grand Piano).
 
         Returns:
             A new PrettyMIDI object with all notes consolidated into one
@@ -83,13 +85,11 @@ class MidiCleaner:
         """
         all_notes = []
         all_control_changes = []
-        program = 0
         name = "Right Hand" if channel == 0 else "Left Hand"
 
         for instrument in midi.instruments:
             all_notes.extend(copy.deepcopy(instrument.notes))
             all_control_changes.extend(copy.deepcopy(instrument.control_changes))
-            program = instrument.program
 
         new_instrument = pretty_midi.Instrument(
             program=program,
