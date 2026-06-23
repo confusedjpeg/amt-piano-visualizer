@@ -268,12 +268,12 @@ class PipelineOrchestrator:
             acc_midi = self._cleaner.normalize_velocities(acc_midi, min_vel=60, max_vel=100)
 
             # Tempo-Aware Post-Processing (replaces the old hardcoded legato)
-            # Uses the instrumental audio stem for BPM extraction so the
-            # grid math adapts to the song's actual tempo.
-            bpm_audio_source = gated_path if has_piano else instrumental_path
+            # Uses the original input audio for BPM extraction — it has the
+            # clearest beat signal. The gated/stem audio is deliberately NOT
+            # used because noise-gating can remove transient beat information.
             acc_midi = post_process_midi(
                 acc_midi,
-                bpm_audio_source,
+                audio_path,
                 config=self._config.post_processing,
             )
 
