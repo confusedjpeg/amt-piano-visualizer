@@ -104,6 +104,10 @@ class ChordDetector:
         # Classify each beat
         raw_chords = self._classify_beats(beat_chroma, beat_grid)
 
+        # Detect key and normalise roots so they cluster in a narrow register
+        key_root = self._detect_key(beat_chroma)
+        raw_chords = self._normalise_roots(raw_chords, key_root)
+
         # Consolidate consecutive identical chords
         consolidated = self._consolidate(raw_chords)
 
@@ -197,6 +201,52 @@ class ChordDetector:
                     best_type = chord_type
 
         return best_root, best_type, best_score
+
+    def _detect_key(self, beat_chroma: np.ndarray) -> int:
+        """Detect the song's key from beat-synchronous chroma.
+
+        Averages all chroma vectors and returns the index of the
+        most prominent pitch class as the tonic (0=C ... 11=B).
+        """
+        if beat_chroma.size == 0:
+            return 0
+        avg_chroma = beat_chroma.mean(axis=0)
+        return int(np.argmax(avg_chroma))
+
+    def _normalise_roots(
+        self, chords: list[ChordEvent], key_root: int
+    ) -> list[ChordEvent]:
+        """Normalise chord root MIDI notes relative to the detected key.
+
+        All chord roots are transposed so they cluster within a narrow
+        register around the key tonic in octave 3, avoiding wild jumps.
+        """
+        if not chords:
+            return []
+
+        base_midi = 48 + key_root
+        result: list[ChordEvent] = []
+
+        for chord in chords:
+            root_pc = chord.root_note % 12
+            relative = (root_pc - key_root) % 12
+            new_root = base_midi + relative
+
+            while new_root < 24:
+                new_root += 12
+            while new_root > 84:
+                new_root -= 12
+
+            result.append(ChordEvent(
+                start_time=chord.start_time,
+                end_time=chord.end_time,
+                chord_label=chord.chord_label,
+                root_note=new_root,
+                chord_type=chord.chord_type,
+                intervals=chord.intervals,
+            ))
+
+        return result
 
     @staticmethod
     def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
