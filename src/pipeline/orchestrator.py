@@ -31,7 +31,7 @@ from src.transcription.vocal_transcriber import VocalTranscriber
 from src.utils.file_io import create_run_directory, ensure_directory, generate_run_id, safe_copy
 from src.utils.logger import get_logger
 from src.utils.validators import validate_audio_file
-from src.video.renderer import VideoRenderer
+from src.video import create_renderer
 
 log = get_logger(__name__)
 
@@ -78,8 +78,8 @@ class PipelineOrchestrator:
         self._playability_filter = PlayabilityFilter(config.playability)
         self._merger = MidiMerger()
 
-        # Step 5: Video
-        self._renderer = VideoRenderer(config.video)
+        # Step 5: Video (auto-selects MIDIVisualizer or Python fallback)
+        self._renderer = create_renderer(config.video)
 
     def run(
         self,

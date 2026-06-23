@@ -63,8 +63,9 @@ ghost_note_pruning:
   loud_vel_threshold: 70          # Rule 3: A preceding note must exceed this to cast a shadow
   shadow_window_ms: 200.0         # Rule 3: Look-back window (ms) for a loud "parent" note
 
-# ── Step 5: MIDIVisualizer ──
+# ── Step 5: Video Rendering ──
 video:
+  renderer: "auto"                    # auto | midi_visualizer | python
   midi_visualizer_path: "MIDIVisualizer"  # Must be on PATH or absolute
   resolution: "1920x1080"
   fps: 60

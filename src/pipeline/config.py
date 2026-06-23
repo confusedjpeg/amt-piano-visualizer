@@ -129,8 +129,15 @@ class GhostNotePruningConfig(BaseModel):
 # ── Step 5: Video Rendering ──────────────────────────────────────────────────
 
 class VideoConfig(BaseModel):
-    """Configuration for MIDIVisualizer video rendering."""
+    """Configuration for video rendering.
 
+    Supports two backends:
+      - 'midi_visualizer': External MIDIVisualizer binary (highest quality).
+      - 'python': Pure-Python fallback using Pillow + MoviePy.
+      - 'auto' (default): Try MIDIVisualizer first, fall back to Python.
+    """
+
+    renderer: str = "auto"  # "auto" | "midi_visualizer" | "python"
     midi_visualizer_path: str = "MIDIVisualizer"
     resolution: str = "1920x1080"
     fps: int = 60
