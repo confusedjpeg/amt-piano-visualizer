@@ -231,7 +231,7 @@ class PythonVideoRenderer:
             # synthesize it from the final MIDI.  The original input song
             # is deliberately NOT used — it would not match the visuals.
             audio_attached = False
-            synth_audio_path = self._synthesize_midi_audio(pm, output_path)
+            synth_audio_path = self._synthesize_midi_audio(pm, midi_path, output_path)
             if synth_audio_path and synth_audio_path.exists():
                 try:
                     audio_clip = AudioFileClip(str(synth_audio_path))
@@ -290,48 +290,76 @@ class PythonVideoRenderer:
     # ── MIDI Audio Synthesis ─────────────────────────────────────────────
 
     def _synthesize_midi_audio(
-        self, pm: pretty_midi.PrettyMIDI, output_path: Path
+        self, pm: pretty_midi.PrettyMIDI, midi_path: Path, output_path: Path
     ) -> Path | None:
-        """Synthesize piano audio from the MIDI using pretty_midi.
+        """Synthesize piano audio from the MIDI file.
 
-        Tries fluidsynth() first (higher quality, requires FluidSynth
-        + a SoundFont), falls back to the built-in sine-wave synthesizer.
+        Tries in order:
+          1. FluidSynth CLI (bundled binary in assets/fluidsynth/bin/)
+          2. pyfluidsynth Python binding (if installed)
+          3. Built-in sine-wave synthesizer (ugly last resort)
 
         Returns:
             Path to the temporary WAV file, or None if synthesis fails.
         """
         import soundfile as sf
+        import subprocess
         import os
 
         synth_path = output_path.with_suffix(".synth.wav")
         sample_rate = 44100
+        sf2_path = Path("assets/TimGM6mb.sf2").resolve()
 
-        # Try to find FluidSynth DLL and add to PATH on Windows
-        if os.name == "nt":
-            fluidsynth_bin = Path("assets/fluidsynth/bin").resolve()
-            if fluidsynth_bin.exists():
-                try:
-                    if hasattr(os, "add_dll_directory"):
-                        os.add_dll_directory(str(fluidsynth_bin))
-                    os.environ["PATH"] = f"{fluidsynth_bin};{os.environ.get('PATH', '')}"
-                except Exception as e:
-                    log.warning(f"Failed to add FluidSynth DLL directory: {e}")
+        # ── Approach 1: FluidSynth CLI (bundled binary) ─────────────────
+        fluidsynth_bin = Path("assets/fluidsynth/bin/fluidsynth.exe").resolve()
+        if fluidsynth_bin.is_file() and sf2_path.exists():
+            try:
+                log.info("Synthesizing piano audio via FluidSynth CLI ...")
+                result = subprocess.run(
+                    [
+                        str(fluidsynth_bin),
+                        "-ni",                     # no interactive mode
+                        "-r", str(sample_rate),
+                        "-T", "wav",
+                        "-F", str(synth_path),
+                        str(sf2_path),
+                        str(midi_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                if result.returncode == 0 and synth_path.exists():
+                    audio_data, _sr = sf.read(str(synth_path))
+                    if audio_data.ndim > 1:
+                        audio_data = audio_data.mean(axis=1)  # stereo → mono
+                    # Normalize to prevent clipping
+                    peak = np.max(np.abs(audio_data))
+                    if peak > 0:
+                        audio_data = audio_data / peak * 0.9
+                    sf.write(str(synth_path), audio_data, sample_rate)
+                    log.info("Piano audio synthesized via FluidSynth CLI")
+                    return synth_path
+                log.warning(f"FluidSynth CLI failed (rc={result.returncode})")
+            except (subprocess.TimeoutExpired, OSError) as e:
+                log.warning(f"FluidSynth CLI failed: {e}")
 
-        # Try FluidSynth first (much better sound quality)
+        # ── Approach 2: pyfluidsynth (Python binding, if installed) ─────
         try:
-            sf2_path = Path("assets/TimGM6mb.sf2").resolve()
             if sf2_path.exists():
                 audio_data = pm.fluidsynth(fs=sample_rate, sf2_path=str(sf2_path))
-                log.info("Synthesized MIDI audio via FluidSynth")
+                log.info("Synthesized via pyfluidsynth")
             else:
-                log.warning("SoundFont not found, skipping FluidSynth")
                 raise FileNotFoundError("SoundFont not found")
-        except Exception as fs_exc:
-            log.warning(f"FluidSynth synthesis failed: {fs_exc}")
-            # FluidSynth not available — use built-in sine-wave synthesis
+        except Exception:
+            # ── Approach 3: Built-in sine-wave fallback ────────────────
+            log.warning(
+                "No FluidSynth available — using built-in sine-wave synth. "
+                "Install pyfluidsynth or ensure assets/fluidsynth/bin/ "
+                "contains fluidsynth.exe for realistic piano sound."
+            )
             try:
                 audio_data = pm.synthesize(fs=sample_rate)
-                log.info("Synthesized MIDI audio via built-in synthesizer")
             except Exception as exc:
                 log.warning(f"MIDI audio synthesis failed: {exc}")
                 return None
