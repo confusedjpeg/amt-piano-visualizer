@@ -364,14 +364,20 @@ class PythonVideoRenderer:
     def _extract_notes(self, pm: pretty_midi.PrettyMIDI) -> list[_NoteEvent]:
         """Extract all notes from the PrettyMIDI object.
 
-        Channel assignment: instrument index 0 → channel 0 (RH),
-        all other instruments → channel 1 (LH).
+        Channel assignment: instruments named 'Right Hand' → channel 0,
+        'Left Hand' → channel 1. Falls back to instrument list index
+        for any instrument with an unrecognized name.
         """
         events: list[_NoteEvent] = []
         for idx, inst in enumerate(pm.instruments):
             if inst.is_drum:
                 continue
-            channel = 0 if idx == 0 else 1
+            if "Right Hand" in inst.name:
+                channel = 0
+            elif "Left Hand" in inst.name:
+                channel = 1
+            else:
+                channel = 0 if idx == 0 else 1
             for note in inst.notes:
                 # Clamp to piano range
                 if note.pitch < PIANO_MIN_NOTE or note.pitch > PIANO_MAX_NOTE:

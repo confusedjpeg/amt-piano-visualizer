@@ -344,6 +344,26 @@ class TestPythonVideoRenderer:
         pitches = {n.pitch for n in notes}
         assert pitches == {60, 64, 67}
 
+    def test_channel_by_name_not_index(self, tmp_path):
+        """Channel assignment should use instrument name, not list index."""
+        renderer = self._make_renderer()
+
+        # Create a MIDI where LH instrument appears FIRST (opposite of usual)
+        pm = pretty_midi.PrettyMIDI(initial_tempo=120.0)
+        lh = pretty_midi.Instrument(program=0, name="Left Hand")
+        lh.notes.append(pretty_midi.Note(velocity=80, pitch=48, start=0.0, end=1.0))
+        rh = pretty_midi.Instrument(program=0, name="Right Hand")
+        rh.notes.append(pretty_midi.Note(velocity=80, pitch=60, start=0.0, end=1.0))
+        pm.instruments.extend([lh, rh])
+
+        notes = renderer._extract_notes(pm)
+        assert len(notes) == 2
+        for n in notes:
+            if n.pitch == 48:
+                assert n.channel == 1, f"LH note should be channel 1, got {n.channel}"
+            elif n.pitch == 60:
+                assert n.channel == 0, f"RH note should be channel 0, got {n.channel}"
+
     def test_background_color_parsing(self):
         """Config background_color should be parsed to RGB tuple."""
         from src.video.python_renderer import _parse_background_color
