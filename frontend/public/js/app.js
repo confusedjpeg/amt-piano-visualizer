@@ -2,6 +2,23 @@ import { initScene, setPulse, resize } from './scene.js';
 
 const API_BASE = window.location.origin;
 
+const STEP_NAMES = ['Stem Separation', 'Vocal Transcription', 'Arrangement Generation', 'MIDI Processing', 'Video Rendering'];
+
+const STEP_KEY_TO_INDEX = {
+  'stem_separation': 0,
+  'vocal_transcription': 1,
+  'vocal_skipped': 1,
+  'accompaniment_generation': 2,
+  'piano_transcription': 2,
+  'algorithmic_arrangement': 2,
+  'noise_gate': 2,
+  'midi_processing': 3,
+  'playability_filter': 3,
+  'video_rendering': 4,
+};
+
+const MAX_POLL_ITERATIONS = 300; // 5 minutes at 1s intervals
+
 const state = {
   file: null,
   includeVocals: true,
@@ -159,10 +176,11 @@ async function runWithBackend() {
     const { run_id } = await runRes.json();
     state.runId = run_id;
 
-    const stepNames = ['Stem Separation', 'Vocal Transcription', 'Arrangement Generation', 'MIDI Processing', 'Video Rendering'];
     let done = false;
+    let iterations = 0;
 
     while (!done) {
+      if (iterations++ >= MAX_POLL_ITERATIONS) throw new Error('Pipeline timed out after 5 minutes');
       await sleep(1000);
       const res = await fetch(API_BASE + '/api/status/' + run_id);
       if (!res.ok) throw new Error('Status check failed');
@@ -172,29 +190,16 @@ async function runWithBackend() {
       if (data.status === 'completed') done = true;
 
       const completed = data.steps_completed || [];
-      const pct = data.progress || Math.min(Math.round((completed.length / stepNames.length) * 100), 99);
+      const pct = data.progress || Math.min(Math.round((completed.length / STEP_NAMES.length) * 100), 99);
       progressFill.style.width = pct + '%';
       progressPct.textContent = pct + '%';
       setPulse(pct / 100);
 
-      const stepKeyToIndex = {
-        'stem_separation': 0,
-        'vocal_transcription': 1,
-        'vocal_skipped': 1,
-        'accompaniment_generation': 2,
-        'piano_transcription': 2,
-        'algorithmic_arrangement': 2,
-        'noise_gate': 2,
-        'midi_processing': 3,
-        'playability_filter': 3,
-        'video_rendering': 4,
-      };
-
       for (const key of completed) {
-        const idx = stepKeyToIndex[key];
+        const idx = STEP_KEY_TO_INDEX[key];
         if (idx !== undefined) {
           const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
-          if (el && !el.classList.contains('done')) {
+          if (el && !el.classList.contains('done') && !el.classList.contains('skipped')) {
             el.classList.remove('active');
             el.classList.add('done');
             el.querySelector('.step-indicator').textContent = '\u2713';
@@ -202,7 +207,15 @@ async function runWithBackend() {
         }
       }
 
-      const activeIdx = completed.length < stepNames.length ? completed.length : stepNames.length - 1;
+      const activeIdx = (() => {
+        let idx = completed.length < STEP_NAMES.length ? completed.length : STEP_NAMES.length - 1;
+        while (idx < STEP_NAMES.length) {
+          const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
+          if (!el || !el.classList.contains('skipped')) break;
+          idx++;
+        }
+        return Math.min(idx, STEP_NAMES.length - 1);
+      })();
       stepsContainer.querySelectorAll('.step').forEach(el => {
         const i = parseInt(el.dataset.step);
         if (i === activeIdx && !el.classList.contains('done') && !el.classList.contains('skipped')) {
@@ -237,19 +250,12 @@ async function runWithBackend() {
 }
 
 async function runSimulated() {
-  const steps = [
-    { name: 'Stem Separation', d: [1800, 3000] },
-    { name: 'Vocal Transcription', d: [2000, 3500] },
-    { name: 'Arrangement Generation', d: [2800, 4800] },
-    { name: 'MIDI Processing', d: [1000, 2000] },
-    { name: 'Video Rendering', d: [3500, 6000] },
-  ];
-
-  const n = steps.length;
+  const stepDurations = [[1800, 3000], [2000, 3500], [2800, 4800], [1000, 2000], [3500, 6000]];
+  const n = stepDurations.length;
   let elapsed = 0;
 
   for (let i = 0; i < n; i++) {
-    const delay = rand(steps[i].d[0], steps[i].d[1]);
+    const delay = rand(stepDurations[i][0], stepDurations[i][1]);
     const el = stepsContainer.querySelector(`[data-step="${i}"]`);
     el.classList.add('active');
 
@@ -270,7 +276,7 @@ async function runSimulated() {
   const runId = 'demo_' + Date.now().toString(36);
   showResults(runId, {
     duration_seconds: elapsed / 1000,
-    steps_completed: steps.map(s => s.name.toLowerCase().replace(/\s+/g, '_')),
+    steps_completed: STEP_NAMES.map(s => s.toLowerCase().replace(/\s+/g, '_')),
     warnings: [],
     midi_path: runId + '_final.mid',
     video_path: runId + '_synthesia.mp4',
