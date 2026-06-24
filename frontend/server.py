@@ -104,11 +104,13 @@ async def _execute_pipeline(run_id: str, input_path: Path, config: PipelineConfi
     _active_runs[run_id]["status"] = "running"
 
     def progress_callback(info):
+        step = info.get("step", "")
         completed = info.get("steps_completed", [])
         total = info.get("total_expected", _TOTAL_EXPECTED_STEPS)
+        print(f"  [{run_id}] Progress: {step} ({len(completed)}/{total} steps)")
         with _runs_lock:
             _active_runs[run_id].update({
-                "step": info.get("step", ""),
+                "step": step,
                 "steps_completed": completed,
                 "progress": min(int(len(completed) / total * 100), 99),
             })
@@ -191,4 +193,9 @@ async def head_runs():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="127.0.0.1", port=8765, reload=True)
+    print("=" * 60)
+    print("  Pianoforge FastAPI Server starting...")
+    print(f"  Frontend + API: http://localhost:8765")
+    print("  Pipeline logs appear below as they run.")
+    print("=" * 60)
+    uvicorn.run("server:app", host="127.0.0.1", port=8765, reload=True, log_level="info")
