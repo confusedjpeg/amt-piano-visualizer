@@ -282,6 +282,8 @@ async function runSimulated() {
     progressPct.textContent = pct + '%';
     setPct(pct);
     elapsed += delay;
+    const elapsedSecs = Math.floor(elapsed / 1000);
+    progressElapsed.textContent = elapsedSecs < 60 ? elapsedSecs + 's' : Math.floor(elapsedSecs/60) + 'm ' + (elapsedSecs%60) + 's';
   }
 
   const runId = 'demo_' + Date.now().toString(36);
