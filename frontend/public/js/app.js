@@ -44,6 +44,7 @@ const submitBtn = $('#submitBtn');
 const progressSection = $('#progressSection');
 const progressFill = $('#progressFill');
 const progressPct = $('#progressPct');
+const progressElapsed = $('#progressElapsed');
 const stepsContainer = $('#stepsContainer');
 const resultsSection = $('#resultsSection');
 const midiPath = $('#midiPath');
@@ -175,6 +176,7 @@ async function runWithBackend() {
     if (!runRes.ok) throw new Error('Server error ' + runRes.status);
     const { run_id } = await runRes.json();
     state.runId = run_id;
+    const startTime = Date.now();
 
     let done = false;
     let iterations = 0;
@@ -194,6 +196,9 @@ async function runWithBackend() {
       progressFill.style.width = pct + '%';
       progressPct.textContent = pct + '%';
       setPulse(pct / 100);
+
+      const elapsedSecs = Math.floor((Date.now() - startTime) / 1000);
+      progressElapsed.textContent = elapsedSecs < 60 ? elapsedSecs + 's' : Math.floor(elapsedSecs/60) + 'm ' + (elapsedSecs%60) + 's';
 
       for (const key of completed) {
         const idx = STEP_KEY_TO_INDEX[key];
@@ -255,6 +260,12 @@ async function runSimulated() {
   let elapsed = 0;
 
   for (let i = 0; i < n; i++) {
+    if (i === 1 && !state.includeVocals) {
+      const el = stepsContainer.querySelector(`[data-step="${i}"]`);
+      el.classList.add('skipped');
+      el.querySelector('.step-indicator').textContent = '\u2014';
+      continue;
+    }
     const delay = rand(stepDurations[i][0], stepDurations[i][1]);
     const el = stepsContainer.querySelector(`[data-step="${i}"]`);
     el.classList.add('active');
@@ -276,7 +287,7 @@ async function runSimulated() {
   const runId = 'demo_' + Date.now().toString(36);
   showResults(runId, {
     duration_seconds: elapsed / 1000,
-    steps_completed: STEP_NAMES.map(s => s.toLowerCase().replace(/\s+/g, '_')),
+    steps_completed: (state.includeVocals ? STEP_NAMES : STEP_NAMES.filter((_, i) => i !== 1)).map(s => s.toLowerCase().replace(/\s+/g, '_')),
     warnings: [],
     midi_path: runId + '_final.mid',
     video_path: runId + '_synthesia.mp4',
@@ -361,6 +372,7 @@ function resetSteps() {
   }
   progressFill.style.width = '0%';
   progressPct.textContent = '0%';
+  if (typeof progressElapsed !== 'undefined') progressElapsed.textContent = '0s';
   resultsSection.classList.remove('visible');
   videoContainer.classList.remove('visible');
 }

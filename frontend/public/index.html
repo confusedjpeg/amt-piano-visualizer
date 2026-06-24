@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pianoforge — AI Piano Arranger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="scene-container"></div>
+<div class="noise-overlay"></div>
+<div class="vignette"></div>
+
+<div class="toast-container" id="toasts"></div>
+
+<div class="app">
+
+  <!-- Nav -->
+  <header class="nav">
+    <a class="nav-brand" href="/">
+      <div class="nav-icon">♩</div>
+      <span class="nav-title">Pian<em>oforge</em></span>
+    </a>
+    <div class="nav-right">
+      <span class="nav-badge" id="navBadge">Server Connected</span>
+      <span class="nav-version">v1.0</span>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <span class="hero-tag">AI Piano Arranger</span>
+    <h1>From audio to<br>playable <em>piano</em></h1>
+    <p>Upload any song and transform it into a two-handed piano arrangement with a Synthesia-style falling-notes video.</p>
+  </section>
+
+  <!-- Upload -->
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" id="fileInput" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac">
+    <div class="upload-prompt">
+      <div class="upload-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <div class="upload-label">Drop your audio file here</div>
+      <div class="upload-hint">MP3, WAV, M4A, FLAC, OGG &mdash; up to 100 MB</div>
+    </div>
+    <div class="upload-file">
+      <span class="upload-file-name" id="fileName"></span>
+      <span class="upload-file-size" id="fileSize"></span>
+      <button class="upload-clear" id="clearFile" title="Remove file">&times;</button>
+    </div>
+  </div>
+
+  <!-- Config -->
+  <div class="config-panel glass">
+    <div class="config-grid">
+      <div>
+        <span class="config-label">Vocal Melody</span>
+        <div class="toggle-group" id="vocalsToggle">
+          <button class="toggle-btn active" data-value="true">Include</button>
+          <button class="toggle-btn" data-value="false">Skip</button>
+        </div>
+      </div>
+      <div>
+        <span class="config-label">Existing Piano</span>
+        <div class="toggle-group" id="pianoToggle">
+          <button class="toggle-btn active" data-value="true">Yes</button>
+          <button class="toggle-btn" data-value="false">No</button>
+        </div>
+      </div>
+      <div>
+        <span class="config-label">Arrangement Style</span>
+        <div class="select-wrap">
+          <select id="styleSelect">
+            <option value="pop_ballad">Pop Ballad</option>
+            <option value="classical">Classical</option>
+            <option value="jazz">Jazz</option>
+            <option value="rock">Rock</option>
+            <option value="minimal">Minimal</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <span class="config-label">Handedness</span>
+        <div class="select-wrap">
+          <select id="handsSelect">
+            <option value="both">Both Hands</option>
+            <option value="right">Right Hand Only</option>
+            <option value="left">Left Hand Only</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="submit-row">
+      <button class="submit-btn" id="submitBtn" disabled>
+        <span class="spinner"></span>
+        <span class="btn-text">Generate Arrangement &rarr;</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-section glass" id="progressSection">
+    <div class="progress-header">
+      <span class="progress-title">Pipeline</span>
+      <span class="progress-elapsed" id="progressElapsed">0s</span>
+      <span class="progress-pct" id="progressPct">0%</span>
+    </div>
+    <div class="progress-bar-track">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="steps" id="stepsContainer">
+      <div class="step" data-step="0"><div class="step-indicator">1</div><span class="step-label">Stem Separation</span><span class="step-time"></span></div>
+      <div class="step" data-step="1"><div class="step-indicator">2</div><span class="step-label">Vocal Transcription</span><span class="step-time"></span></div>
+      <div class="step" data-step="2"><div class="step-indicator">3</div><span class="step-label">Arrangement Generation</span><span class="step-time"></span></div>
+      <div class="step" data-step="3"><div class="step-indicator">4</div><span class="step-label">MIDI Processing</span><span class="step-time"></span></div>
+      <div class="step" data-step="4"><div class="step-indicator">5</div><span class="step-label">Video Rendering</span><span class="step-time"></span></div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section glass" id="resultsSection">
+    <div class="results-header">
+      <span class="results-title">Results</span>
+      <span class="results-badge">Complete</span>
+    </div>
+    <div class="results-grid">
+      <div class="result-card">
+        <div class="result-card-icon">&#x1F3B9;</div>
+        <h3>MIDI File</h3>
+        <div class="file-path" id="midiPath">&mdash;</div>
+        <a class="download-btn" id="midiDownload" href="#">Download MIDI</a>
+      </div>
+      <div class="result-card">
+        <div class="result-card-icon">&#x25B6;</div>
+        <h3>Synthesia Video</h3>
+        <div class="file-path" id="videoPath">&mdash;</div>
+        <button class="download-btn" id="videoToggle">Show Video</button>
+      </div>
+      <div class="result-card video-card">
+        <div class="video-container" id="videoContainer">
+          <video id="videoPlayer" controls playsinline preload="metadata"></video>
+        </div>
+      </div>
+    </div>
+    <div class="results-meta" id="resultsMeta"></div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <p>Pianoforge v1.0 &mdash; AI Piano Arranger</p>
+  </footer>
+
+</div>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
