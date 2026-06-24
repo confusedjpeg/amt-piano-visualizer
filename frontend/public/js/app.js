@@ -140,7 +140,7 @@ async function runPipeline() {
 
   state.running = false;
   submitBtn.classList.remove('loading');
-  submitBtn.disabled = true;
+  submitBtn.disabled = state.completed;
   uploadZone.style.pointerEvents = '';
   clearFile.style.display = '';
 }
@@ -219,9 +219,10 @@ async function runWithBackend() {
     const final = await (await fetch(API_BASE + '/api/status/' + run_id)).json();
 
     stepsContainer.querySelectorAll('.step').forEach(el => {
+      if (el.classList.contains('skipped')) return;
       el.classList.remove('active');
       el.classList.add('done');
-      el.querySelector('.step-indicator').textContent = '✓';
+      el.querySelector('.step-indicator').textContent = '\u2713';
     });
 
     showResults(run_id, final);
@@ -230,11 +231,7 @@ async function runWithBackend() {
   } catch (err) {
     showToast('Pipeline failed: ' + (err.message || 'Unknown error'), 'error');
     setPulse(0);
-    state.running = false;
-    submitBtn.classList.remove('loading');
-    submitBtn.disabled = false;
-    uploadZone.style.pointerEvents = '';
-    clearFile.style.display = '';
+    state.completed = false;
     resetSteps();
   }
 }
