@@ -34,6 +34,8 @@ from src.utils.logger import get_logger
 from src.utils.validators import validate_audio_file
 from src.video import create_renderer
 
+_TOTAL_EXPECTED_STEPS = 5
+
 log = get_logger(__name__)
 
 
@@ -98,6 +100,9 @@ class PipelineOrchestrator:
             include_vocals: Whether to transcribe vocals (overrides config).
             has_piano: Whether source has piano (overrides config).
             output_dir: Override for the output directory.
+            progress_callback: Optional callback invoked after each major
+                step. Receives a dict with keys ``step``, ``steps_completed``,
+                and ``total_expected``.
 
         Returns:
             PipelineResult with paths to final MIDI and video.
@@ -140,7 +145,7 @@ class PipelineOrchestrator:
                 progress_callback({
                     "step": "stem_separation",
                     "steps_completed": steps_completed.copy(),
-                    "total_expected": 5,
+                    "total_expected": _TOTAL_EXPECTED_STEPS,
                 })
 
             # ── STEP 2: Vocal Transcription (conditional) ──
@@ -175,7 +180,7 @@ class PipelineOrchestrator:
                     progress_callback({
                         "step": "vocal_transcription",
                         "steps_completed": steps_completed.copy(),
-                        "total_expected": 5,
+                        "total_expected": _TOTAL_EXPECTED_STEPS,
                     })
 
                 note_count = sum(len(i.notes) for i in vocals_midi.instruments)
@@ -186,9 +191,9 @@ class PipelineOrchestrator:
 
                 if progress_callback:
                     progress_callback({
-                        "step": "vocal_transcription",
+                        "step": "vocal_skipped",
                         "steps_completed": steps_completed.copy(),
-                        "total_expected": 5,
+                        "total_expected": _TOTAL_EXPECTED_STEPS,
                     })
 
             # ── STEP 3: Accompaniment Generation ──
@@ -229,7 +234,7 @@ class PipelineOrchestrator:
                     progress_callback({
                         "step": "accompaniment_generation",
                         "steps_completed": steps_completed.copy(),
-                        "total_expected": 5,
+                        "total_expected": _TOTAL_EXPECTED_STEPS,
                     })
             else:
                 # ── PATH B: Algorithmic chord-based arrangement ──
@@ -251,7 +256,7 @@ class PipelineOrchestrator:
                     progress_callback({
                         "step": "accompaniment_generation",
                         "steps_completed": steps_completed.copy(),
-                        "total_expected": 5,
+                        "total_expected": _TOTAL_EXPECTED_STEPS,
                     })
 
             # ── Post-processing: Clean up accompaniment MIDI ──
@@ -343,7 +348,7 @@ class PipelineOrchestrator:
                 progress_callback({
                     "step": "midi_processing",
                     "steps_completed": steps_completed.copy(),
-                    "total_expected": 5,
+                    "total_expected": _TOTAL_EXPECTED_STEPS,
                 })
 
             # Copy to output directory
@@ -365,7 +370,7 @@ class PipelineOrchestrator:
                     progress_callback({
                         "step": "video_rendering",
                         "steps_completed": steps_completed.copy(),
-                        "total_expected": 5,
+                        "total_expected": _TOTAL_EXPECTED_STEPS,
                     })
             except (FileNotFoundError, Exception) as video_exc:
                 # Video rendering is non-critical — pipeline can succeed

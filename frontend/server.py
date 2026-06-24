@@ -10,6 +10,7 @@ import sys
 import time
 import asyncio
 import uuid
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -38,6 +39,7 @@ for d in [INPUT_DIR, OUTPUT_DIR, INTERMEDIATE_DIR]:
 
 executor = ThreadPoolExecutor(max_workers=1)
 _active_runs: dict[str, dict] = {}
+_runs_lock = threading.Lock()
 
 
 @app.on_event("shutdown")
@@ -95,17 +97,21 @@ async def run_pipeline(
     return {"run_id": run_id, "status": "pending"}
 
 
+_TOTAL_EXPECTED_STEPS = 5
+
+
 async def _execute_pipeline(run_id: str, input_path: Path, config: PipelineConfig):
     _active_runs[run_id]["status"] = "running"
 
     def progress_callback(info):
         completed = info.get("steps_completed", [])
-        total = info.get("total_expected", 5)
-        _active_runs[run_id].update({
-            "step": info.get("step", ""),
-            "steps_completed": completed,
-            "progress": min(int(len(completed) / total * 100), 99),
-        })
+        total = info.get("total_expected", _TOTAL_EXPECTED_STEPS)
+        with _runs_lock:
+            _active_runs[run_id].update({
+                "step": info.get("step", ""),
+                "steps_completed": completed,
+                "progress": min(int(len(completed) / total * 100), 99),
+            })
 
     def _run():
         orchestrator = PipelineOrchestrator(config)
@@ -117,24 +123,26 @@ async def _execute_pipeline(run_id: str, input_path: Path, config: PipelineConfi
         )
         return result
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(executor, _run)
 
-        _active_runs[run_id].update({
-            "status": "completed",
-            "progress": 100,
-            "midi_path": str(result.midi_path) if result.midi_path else None,
-            "video_path": str(result.video_path) if result.video_path and str(result.video_path) else None,
-            "duration": result.duration_seconds,
-            "steps": result.steps_completed,
-            "warnings": result.warnings,
-        })
+        with _runs_lock:
+            _active_runs[run_id].update({
+                "status": "completed",
+                "progress": 100,
+                "midi_path": str(result.midi_path) if result.midi_path else None,
+                "video_path": str(result.video_path) if result.video_path and str(result.video_path) else None,
+                "duration": result.duration_seconds,
+                "steps_completed": result.steps_completed,
+                "warnings": result.warnings,
+            })
     except Exception as exc:
-        _active_runs[run_id].update({
-            "status": "failed",
-            "error": str(exc),
-        })
+        with _runs_lock:
+            _active_runs[run_id].update({
+                "status": "failed",
+                "error": str(exc),
+            })
 
 
 # ── API: Poll status ──
@@ -172,7 +180,8 @@ async def download_result(run_id: str, file_type: str):
 
 @app.get("/api/runs")
 async def list_runs():
-    return list(_active_runs.values())
+    with _runs_lock:
+        return list(_active_runs.values())
 
 
 @app.head("/api/runs")
