@@ -447,6 +447,15 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.progress-elapsed {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  margin-right: 16px;
+}
+
 .progress-bar-track {
   width: 100%;
   height: 2px;

@@ -216,7 +216,7 @@ async function runWithBackend() {
         let idx = completed.length < STEP_NAMES.length ? completed.length : STEP_NAMES.length - 1;
         while (idx < STEP_NAMES.length) {
           const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
-          if (!el || !el.classList.contains('skipped')) break;
+          if (!el || (!el.classList.contains('skipped') && !el.classList.contains('done'))) break;
           idx++;
         }
         return Math.min(idx, STEP_NAMES.length - 1);
@@ -374,7 +374,7 @@ function resetSteps() {
   }
   progressFill.style.width = '0%';
   progressPct.textContent = '0%';
-  if (typeof progressElapsed !== 'undefined') progressElapsed.textContent = '0s';
+  progressElapsed.textContent = '0s';
   resultsSection.classList.remove('visible');
   videoContainer.classList.remove('visible');
 }
