@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pretty_midi
@@ -87,6 +88,7 @@ class PipelineOrchestrator:
         include_vocals: bool | None = None,
         has_piano: bool | None = None,
         output_dir: Path | None = None,
+        progress_callback: Callable[[dict], None] | None = None,
     ) -> PipelineResult:
         """
         Execute the full pipeline.
@@ -134,6 +136,13 @@ class PipelineOrchestrator:
             stems = self._separator.separate(audio_path, run_dir)
             steps_completed.append("stem_separation")
 
+            if progress_callback:
+                progress_callback({
+                    "step": "stem_separation",
+                    "steps_completed": steps_completed.copy(),
+                    "total_expected": 5,
+                })
+
             # ── STEP 2: Vocal Transcription (conditional) ──
             vocals_midi_path = None
             if include_vocals:
@@ -162,11 +171,25 @@ class PipelineOrchestrator:
                 vocals_midi.write(str(vocals_midi_path))
                 steps_completed.append("vocal_transcription")
 
+                if progress_callback:
+                    progress_callback({
+                        "step": "vocal_transcription",
+                        "steps_completed": steps_completed.copy(),
+                        "total_expected": 5,
+                    })
+
                 note_count = sum(len(i.notes) for i in vocals_midi.instruments)
                 if note_count == 0:
                     warnings.append("Vocal transcription produced zero notes.")
             else:
                 log.info("Step 2: Skipped (include_vocals=False)")
+
+                if progress_callback:
+                    progress_callback({
+                        "step": "vocal_transcription",
+                        "steps_completed": steps_completed.copy(),
+                        "total_expected": 5,
+                    })
 
             # ── STEP 3: Accompaniment Generation ──
             # CRITICAL: The audio routing forks here based on has_piano.
@@ -201,6 +224,13 @@ class PipelineOrchestrator:
                 )
                 steps_completed.append("noise_gate")
                 steps_completed.append("piano_transcription")
+
+                if progress_callback:
+                    progress_callback({
+                        "step": "accompaniment_generation",
+                        "steps_completed": steps_completed.copy(),
+                        "total_expected": 5,
+                    })
             else:
                 # ── PATH B: Algorithmic chord-based arrangement ──
                 log.info("Step 3B: Generating algorithmic arrangement...")
@@ -216,6 +246,13 @@ class PipelineOrchestrator:
                     run_dir / "accompaniment.mid",
                 )
                 steps_completed.append("algorithmic_arrangement")
+
+                if progress_callback:
+                    progress_callback({
+                        "step": "accompaniment_generation",
+                        "steps_completed": steps_completed.copy(),
+                        "total_expected": 5,
+                    })
 
             # ── Post-processing: Clean up accompaniment MIDI ──
             acc_midi = pretty_midi.PrettyMIDI(str(accompaniment_path))
@@ -302,6 +339,13 @@ class PipelineOrchestrator:
             final_midi.write(str(final_midi_path))
             steps_completed.append("playability_filter")
 
+            if progress_callback:
+                progress_callback({
+                    "step": "midi_processing",
+                    "steps_completed": steps_completed.copy(),
+                    "total_expected": 5,
+                })
+
             # Copy to output directory
             output_midi = output_dir / f"{run_id}_final.mid"
             safe_copy(final_midi_path, output_midi)
@@ -316,6 +360,13 @@ class PipelineOrchestrator:
                     output_path=output_video,
                 )
                 steps_completed.append("video_rendering")
+
+                if progress_callback:
+                    progress_callback({
+                        "step": "video_rendering",
+                        "steps_completed": steps_completed.copy(),
+                        "total_expected": 5,
+                    })
             except (FileNotFoundError, Exception) as video_exc:
                 # Video rendering is non-critical — pipeline can succeed
                 # with just the MIDI output
