@@ -12,9 +12,21 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# Node.js
+node_modules/
+package-lock.json
+npm-debug.log
+
 # OS metadata
 .DS_Store
 Thumbs.db
+NUL
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Large binary assets (downloaded at setup time, not tracked in git)
 assets/fluidsynth/
@@ -24,6 +36,12 @@ assets/*.zip
 # Run output artifacts in project root
 run_*.mp4
 run_*.wav
+run_*.mid
+
+# Frontend build artifacts
+frontend/NUL
+frontend/*.log
+
 data/input/*
 !data/input/.gitkeep
 

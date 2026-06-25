@@ -11,10 +11,12 @@ import time
 import asyncio
 import uuid
 import threading
+from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -28,7 +30,15 @@ from src.pipeline.orchestrator import PipelineOrchestrator
 
 app = FastAPI(title="Pianoforge", version="1.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 STATIC_DIR = Path(__file__).parent
+PUBLIC_DIR = STATIC_DIR / "public"
 DATA_DIR = PROJECT_ROOT / "data"
 INPUT_DIR = DATA_DIR / "input"
 OUTPUT_DIR = DATA_DIR / "output"
@@ -37,8 +47,9 @@ INTERMEDIATE_DIR = DATA_DIR / "intermediate"
 for d in [INPUT_DIR, OUTPUT_DIR, INTERMEDIATE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-executor = ThreadPoolExecutor(max_workers=1)
+executor = ThreadPoolExecutor(max_workers=3)
 _active_runs: dict[str, dict] = {}
+_run_futures: dict[str, Future] = {}
 _runs_lock = threading.Lock()
 
 
@@ -51,9 +62,11 @@ def shutdown():
 
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(PUBLIC_DIR / "index.html")
 
 
+app.mount("/css", StaticFiles(directory=str(PUBLIC_DIR / "css")), name="css")
+app.mount("/js", StaticFiles(directory=str(PUBLIC_DIR / "js")), name="js")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -90,10 +103,16 @@ async def run_pipeline(
         "duration": None,
         "warnings": [],
         "error": None,
+        "filename": file.filename or "unknown",
+        "created_at": datetime.now().isoformat(),
+        "pattern": pattern,
+        "include_vocals": include_vocals.lower() == "true",
+        "has_piano": has_piano.lower() == "true",
     }
 
     asyncio.create_task(_execute_pipeline(run_id, input_path, config))
 
+    print(f"  New run created: {run_id} (file={file.filename}, pattern={pattern})")
     return {"run_id": run_id, "status": "pending"}
 
 
@@ -101,13 +120,15 @@ _TOTAL_EXPECTED_STEPS = 5
 
 
 async def _execute_pipeline(run_id: str, input_path: Path, config: PipelineConfig):
+    print(f"  [{run_id}] Pipeline starting...")
+    print(f"  [{run_id}] Config: include_vocals={config.include_vocals}, has_piano={config.has_piano}, pattern={config.arranger.default_pattern}")
     _active_runs[run_id]["status"] = "running"
 
     def progress_callback(info):
         step = info.get("step", "")
         completed = info.get("steps_completed", [])
         total = info.get("total_expected", _TOTAL_EXPECTED_STEPS)
-        print(f"  [{run_id}] Progress: {step} ({len(completed)}/{total} steps)")
+        print(f"  [{run_id}] Step: {step} | Progress: {len(completed)}/{total} completed")
         with _runs_lock:
             _active_runs[run_id].update({
                 "step": step,
@@ -127,8 +148,12 @@ async def _execute_pipeline(run_id: str, input_path: Path, config: PipelineConfi
 
     loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(executor, _run)
+        future = loop.run_in_executor(executor, _run)
+        with _runs_lock:
+            _run_futures[run_id] = future
+        result = await future
 
+        print(f"  [{run_id}] Pipeline completed successfully in {result.duration_seconds:.1f}s")
         with _runs_lock:
             _active_runs[run_id].update({
                 "status": "completed",
@@ -140,11 +165,17 @@ async def _execute_pipeline(run_id: str, input_path: Path, config: PipelineConfi
                 "warnings": result.warnings,
             })
     except Exception as exc:
+        import traceback
+        print(f"  [{run_id}] ERROR: {exc}")
+        traceback.print_exc()
         with _runs_lock:
             _active_runs[run_id].update({
                 "status": "failed",
                 "error": str(exc),
             })
+    finally:
+        with _runs_lock:
+            _run_futures.pop(run_id, None)
 
 
 # ── API: Poll status ──
@@ -183,7 +214,34 @@ async def download_result(run_id: str, file_type: str):
 @app.get("/api/runs")
 async def list_runs():
     with _runs_lock:
-        return list(_active_runs.values())
+        runs = list(_active_runs.values())
+    runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+    for i, run in enumerate(runs):
+        if run["status"] == "pending":
+            run["queue_position"] = i + 1
+    return runs
+
+
+# ── API: Cancel run ──
+
+@app.post("/api/cancel/{run_id}")
+async def cancel_run(run_id: str):
+    with _runs_lock:
+        run = _active_runs.get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run["status"] not in ("pending", "running"):
+            raise HTTPException(status_code=400, detail=f"Cannot cancel run in '{run['status']}' state")
+
+        future = _run_futures.get(run_id)
+        if future and not future.done():
+            future.cancel()
+
+        run["status"] = "cancelled"
+        run["error"] = "Cancelled by user"
+
+    print(f"  [{run_id}] Run cancelled by user")
+    return {"run_id": run_id, "status": "cancelled"}
 
 
 @app.head("/api/runs")

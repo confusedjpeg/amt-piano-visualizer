@@ -73,9 +73,9 @@ body {
 .app {
   position: relative;
   z-index: 2;
-  max-width: 820px;
+  max-width: 1100px;
   margin: 0 auto;
-  padding: 0 20px 48px;
+  padding: 0 32px 48px;
 }
 
 /* ── Nav ── */
@@ -287,11 +287,14 @@ body {
 }
 .config-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 24px 36px;
   margin-bottom: 24px;
 }
-@media (max-width: 640px) {
+@media (max-width: 768px) {
+  .config-grid { grid-template-columns: 1fr 1fr; gap: 20px; }
+}
+@media (max-width: 540px) {
   .config-grid { grid-template-columns: 1fr; gap: 20px; }
 }
 .config-label {
@@ -450,7 +453,7 @@ body {
 .progress-elapsed {
   font-size: 14px;
   font-weight: 400;
-  color: var(--color-muted);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   margin-left: auto;
   margin-right: 16px;
@@ -679,4 +682,123 @@ body {
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Queue Panel ── */
+.queue-panel {
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  animation: fadeUp 0.5s ease-out;
+}
+.queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.queue-title {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  letter-spacing: -0.2px;
+}
+.queue-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.queue-list {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.015);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.queue-item:hover {
+  border-color: var(--border-active);
+  background: rgba(255,255,255,0.03);
+}
+.queue-item.active {
+  border-color: var(--gold);
+  background: var(--gold-dim);
+}
+.queue-item-status {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.queue-item-status.pending { background: var(--text-muted); }
+.queue-item-status.running { background: var(--gold); animation: pulse 1.5s ease-in-out infinite; }
+.queue-item-status.completed { background: var(--success); }
+.queue-item-status.failed { background: var(--error); }
+.queue-item-status.cancelled { background: var(--text-muted); }
+.queue-item-info {
+  flex: 1;
+  min-width: 0;
+}
+.queue-item-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-item-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.queue-item-progress {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Progress filename ── */
+.progress-filename {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Progress actions ── */
+.progress-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.cancel-btn {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 14px;
+  background: transparent;
+  border: 1px solid rgba(232, 87, 74, 0.3);
+  color: var(--error);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.cancel-btn:hover {
+  background: rgba(232, 87, 74, 0.1);
+  border-color: var(--error);
+}
+.cancel-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

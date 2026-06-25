@@ -46,6 +46,15 @@
     <p>Upload any song and transform it into a two-handed piano arrangement with a Synthesia-style falling-notes video.</p>
   </section>
 
+  <!-- Queue Panel -->
+  <div class="queue-panel glass" id="queuePanel" style="display: none;">
+    <div class="queue-header">
+      <span class="queue-title">Pipeline Queue</span>
+      <span class="queue-count" id="queueCount">0 runs</span>
+    </div>
+    <div class="queue-list" id="queueList"></div>
+  </div>
+
   <!-- Upload -->
   <div class="upload-zone" id="uploadZone">
     <input type="file" id="fileInput" accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac">
@@ -89,20 +98,8 @@
         <div class="select-wrap">
           <select id="styleSelect">
             <option value="pop_ballad">Pop Ballad</option>
-            <option value="classical">Classical</option>
-            <option value="jazz">Jazz</option>
-            <option value="rock">Rock</option>
-            <option value="minimal">Minimal</option>
-          </select>
-        </div>
-      </div>
-      <div>
-        <span class="config-label">Handedness</span>
-        <div class="select-wrap">
-          <select id="handsSelect">
-            <option value="both">Both Hands</option>
-            <option value="right">Right Hand Only</option>
-            <option value="left">Left Hand Only</option>
+            <option value="arpeggiated">Arpeggiated</option>
+            <option value="driving_eighths">Driving Eighths</option>
           </select>
         </div>
       </div>
@@ -118,10 +115,11 @@
   <!-- Progress -->
   <div class="progress-section glass" id="progressSection">
     <div class="progress-header">
-      <span class="progress-title">Pipeline</span>
+      <span class="progress-title" id="progressTitle">Pipeline</span>
       <span class="progress-elapsed" id="progressElapsed">0s</span>
       <span class="progress-pct" id="progressPct">0%</span>
     </div>
+    <div class="progress-filename" id="progressFilename"></div>
     <div class="progress-bar-track">
       <div class="progress-bar-fill" id="progressFill"></div>
     </div>
@@ -131,6 +129,9 @@
       <div class="step" data-step="2"><div class="step-indicator">3</div><span class="step-label">Arrangement Generation</span><span class="step-time"></span></div>
       <div class="step" data-step="3"><div class="step-indicator">4</div><span class="step-label">MIDI Processing</span><span class="step-time"></span></div>
       <div class="step" data-step="4"><div class="step-indicator">5</div><span class="step-label">Video Rendering</span><span class="step-time"></span></div>
+    </div>
+    <div class="progress-actions">
+      <button class="cancel-btn" id="cancelBtn">Cancel</button>
     </div>
   </div>
 

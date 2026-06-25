@@ -17,24 +17,22 @@ const STEP_KEY_TO_INDEX = {
   'video_rendering': 4,
 };
 
-const MAX_POLL_ITERATIONS = 300; // 5 minutes at 1s intervals
+const MAX_POLL_ITERATIONS = 300;
 
 const state = {
   file: null,
   includeVocals: true,
   hasPiano: true,
   style: 'pop_ballad',
-  hands: 'both',
-  running: false,
-  completed: false,
   backendAvailable: false,
-  runId: null,
+  runs: new Map(),
+  activeRunId: null,
+  pollTimers: new Map(),
 };
 
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
-// DOM refs
 const uploadZone = $('#uploadZone');
 const fileInput = $('#fileInput');
 const fileName = $('#fileName');
@@ -42,6 +40,8 @@ const fileSize = $('#fileSize');
 const clearFile = $('#clearFile');
 const submitBtn = $('#submitBtn');
 const progressSection = $('#progressSection');
+const progressTitle = $('#progressTitle');
+const progressFilename = $('#progressFilename');
 const progressFill = $('#progressFill');
 const progressPct = $('#progressPct');
 const progressElapsed = $('#progressElapsed');
@@ -56,6 +56,10 @@ const videoPlayer = $('#videoPlayer');
 const resultsMeta = $('#resultsMeta');
 const toasts = $('#toasts');
 const navBadge = $('#navBadge');
+const queuePanel = $('#queuePanel');
+const queueList = $('#queueList');
+const queueCount = $('#queueCount');
+const cancelBtn = $('#cancelBtn');
 
 function init() {
   initScene(document.getElementById('scene-container'));
@@ -64,11 +68,11 @@ function init() {
 }
 
 function bindEvents() {
-  // Toggles
   $$('.toggle-group').forEach(group => {
     group.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        if (state.running) return;
+        const activeRun = state.activeRunId ? state.runs.get(state.activeRunId) : null;
+        if (activeRun && (activeRun.status === 'running' || activeRun.status === 'pending')) return;
         group.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         const key = group.id === 'vocalsToggle' ? 'includeVocals' : 'hasPiano';
@@ -78,10 +82,12 @@ function bindEvents() {
   });
 
   $('#styleSelect').addEventListener('change', e => { state.style = e.target.value; });
-  $('#handsSelect').addEventListener('change', e => { state.hands = e.target.value; });
 
-  // Upload
-  uploadZone.addEventListener('click', () => { if (!state.running) fileInput.click(); });
+  uploadZone.addEventListener('click', () => {
+    const activeRun = state.activeRunId ? state.runs.get(state.activeRunId) : null;
+    if (activeRun && (activeRun.status === 'running' || activeRun.status === 'pending')) return;
+    fileInput.click();
+  });
   fileInput.addEventListener('change', e => { if (e.target.files.length) handleFile(e.target.files[0]); });
 
   uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
@@ -94,6 +100,7 @@ function bindEvents() {
 
   clearFile.addEventListener('click', e => { e.stopPropagation(); resetFile(); });
   submitBtn.addEventListener('click', runPipeline);
+  cancelBtn.addEventListener('click', cancelActiveRun);
 }
 
 function detectBackend() {
@@ -101,12 +108,42 @@ function detectBackend() {
     fetch(API_BASE + '/api/runs', { method: 'HEAD', cache: 'no-store' })
       .then(r => {
         state.backendAvailable = r.ok;
-        if (r.ok) navBadge.classList.add('visible');
+        if (r.ok) {
+          navBadge.classList.add('visible');
+          loadExistingRuns();
+        }
       })
       .catch(() => {});
   }
   check();
   setTimeout(check, 2000);
+}
+
+async function loadExistingRuns() {
+  try {
+    const res = await fetch(API_BASE + '/api/runs', { cache: 'no-store' });
+    if (!res.ok) return;
+    const runs = await res.json();
+
+    for (const run of runs) {
+      state.runs.set(run.run_id, run);
+      if (run.status === 'running' || run.status === 'pending') {
+        startPolling(run.run_id);
+      }
+    }
+
+    if (runs.length > 0) {
+      const activeRun = runs.find(r => r.status === 'running' || r.status === 'pending');
+      if (activeRun) {
+        selectRun(activeRun.run_id);
+      } else {
+        selectRun(runs[0].run_id);
+      }
+      renderQueue();
+    }
+  } catch (e) {
+    console.error('Failed to load runs:', e);
+  }
 }
 
 function handleFile(file) {
@@ -137,104 +174,134 @@ function formatSize(bytes) {
 }
 
 async function runPipeline() {
-  if (!state.file || state.running) return;
+  if (!state.file) return;
 
-  state.running = true;
-  state.completed = false;
-  submitBtn.classList.add('loading');
-  submitBtn.disabled = true;
-  uploadZone.style.pointerEvents = 'none';
-  clearFile.style.display = 'none';
+  const fd = new FormData();
+  fd.append('file', state.file);
+  fd.append('include_vocals', String(state.includeVocals));
+  fd.append('has_piano', String(state.hasPiano));
+  fd.append('pattern', state.style);
 
-  progressSection.classList.add('visible');
-  resetSteps();
-  setPulse(0);
+  resetFile();
 
   if (state.backendAvailable) {
-    await runWithBackend();
+    await runWithBackend(fd);
   } else {
     await runSimulated();
   }
-
-  state.running = false;
-  submitBtn.classList.remove('loading');
-  submitBtn.disabled = state.completed;
-  uploadZone.style.pointerEvents = '';
-  clearFile.style.display = '';
 }
 
-async function runWithBackend() {
+async function runWithBackend(fd) {
   try {
-    const fd = new FormData();
-    fd.append('file', state.file);
-    fd.append('include_vocals', String(state.includeVocals));
-    fd.append('has_piano', String(state.hasPiano));
-    fd.append('pattern', state.style);
-    fd.append('hands', state.hands);
-
     const runRes = await fetch(API_BASE + '/api/run', { method: 'POST', body: fd });
     if (!runRes.ok) throw new Error('Server error ' + runRes.status);
     const { run_id } = await runRes.json();
-    state.runId = run_id;
-    const startTime = Date.now();
 
-    let done = false;
-    let iterations = 0;
+    const runData = {
+      run_id,
+      status: 'pending',
+      progress: 0,
+      step: '',
+      steps_completed: [],
+      filename: state.file ? state.file.name : 'unknown',
+      created_at: new Date().toISOString(),
+    };
+    state.runs.set(run_id, runData);
+    selectRun(run_id);
+    renderQueue();
+    startPolling(run_id);
 
-    while (!done) {
-      if (iterations++ >= MAX_POLL_ITERATIONS) throw new Error('Pipeline timed out after 5 minutes');
-      await sleep(1000);
-      const res = await fetch(API_BASE + '/api/status/' + run_id);
+    showToast('Pipeline queued: ' + runData.filename, 'success');
+  } catch (err) {
+    showToast('Failed to start pipeline: ' + (err.message || 'Unknown error'), 'error');
+  }
+}
+
+function startPolling(runId) {
+  if (state.pollTimers.has(runId)) return;
+
+  let iterations = 0;
+  const startTime = Date.now();
+
+  const poll = async () => {
+    if (iterations++ >= MAX_POLL_ITERATIONS) {
+      stopPolling(runId);
+      const run = state.runs.get(runId);
+      if (run) {
+        run.status = 'failed';
+        run.error = 'Pipeline timed out after 5 minutes';
+      }
+      renderQueue();
+      if (state.activeRunId === runId) showRunStatus(runId);
+      return;
+    }
+
+    try {
+      const res = await fetch(API_BASE + '/api/status/' + runId);
       if (!res.ok) throw new Error('Status check failed');
       const data = await res.json();
 
-      if (data.status === 'failed') throw new Error(data.error || 'Pipeline failed');
-      if (data.status === 'completed') done = true;
+      state.runs.set(runId, data);
+      renderQueue();
 
-      const completed = data.steps_completed || [];
-      const pct = data.progress || Math.min(Math.round((completed.length / STEP_NAMES.length) * 100), 99);
-      progressFill.style.width = pct + '%';
-      progressPct.textContent = pct + '%';
-      setPulse(pct / 100);
-
-      const elapsedSecs = Math.floor((Date.now() - startTime) / 1000);
-      progressElapsed.textContent = elapsedSecs < 60 ? elapsedSecs + 's' : Math.floor(elapsedSecs/60) + 'm ' + (elapsedSecs%60) + 's';
-
-      for (const key of completed) {
-        const idx = STEP_KEY_TO_INDEX[key];
-        if (idx !== undefined) {
-          const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
-          if (el && !el.classList.contains('done') && !el.classList.contains('skipped')) {
-            el.classList.remove('active');
-            el.classList.add('done');
-            el.querySelector('.step-indicator').textContent = '\u2713';
-          }
-        }
+      if (state.activeRunId === runId) {
+        showRunStatus(runId);
       }
 
-      const activeIdx = (() => {
-        let idx = completed.length < STEP_NAMES.length ? completed.length : STEP_NAMES.length - 1;
-        while (idx < STEP_NAMES.length) {
-          const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
-          if (!el || (!el.classList.contains('skipped') && !el.classList.contains('done'))) break;
-          idx++;
+      if (data.status === 'completed') {
+        stopPolling(runId);
+        if (state.activeRunId === runId) {
+          showResults(runId, data);
+          setPulse(1);
+          setTimeout(() => setPulse(0), 2000);
         }
-        return Math.min(idx, STEP_NAMES.length - 1);
-      })();
-      stepsContainer.querySelectorAll('.step').forEach(el => {
-        const i = parseInt(el.dataset.step);
-        if (i === activeIdx && !el.classList.contains('done') && !el.classList.contains('skipped')) {
-          el.classList.add('active');
+        showToast('Pipeline complete: ' + (data.filename || runId), 'success');
+      } else if (data.status === 'failed' || data.status === 'cancelled') {
+        stopPolling(runId);
+        if (state.activeRunId === runId) {
+          showToast('Pipeline ' + data.status + ': ' + (data.error || 'Unknown error'), 'error');
+          setPulse(0);
         }
-      });
-
+      }
+    } catch (e) {
+      console.error('Poll error for', runId, e);
     }
+  };
 
+  const timer = setInterval(poll, 1000);
+  state.pollTimers.set(runId, timer);
+  poll();
+}
+
+function stopPolling(runId) {
+  const timer = state.pollTimers.get(runId);
+  if (timer) {
+    clearInterval(timer);
+    state.pollTimers.delete(runId);
+  }
+}
+
+function selectRun(runId) {
+  state.activeRunId = runId;
+  renderQueue();
+  showRunStatus(runId);
+}
+
+function showRunStatus(runId) {
+  const run = state.runs.get(runId);
+  if (!run) return;
+
+  progressSection.classList.add('visible');
+  progressTitle.textContent = 'Pipeline: ' + (run.run_id || '');
+  progressFilename.textContent = run.filename || '';
+
+  resetSteps();
+
+  if (run.status === 'completed') {
     progressFill.style.width = '100%';
     progressPct.textContent = '100%';
-    setPulse(1);
-
-    const final = await (await fetch(API_BASE + '/api/status/' + run_id)).json();
+    progressElapsed.textContent = run.duration ? run.duration.toFixed(1) + 's' : 'Done';
+    cancelBtn.style.display = 'none';
 
     stepsContainer.querySelectorAll('.step').forEach(el => {
       if (el.classList.contains('skipped')) return;
@@ -243,18 +310,141 @@ async function runWithBackend() {
       el.querySelector('.step-indicator').textContent = '\u2713';
     });
 
-    showResults(run_id, final);
-    setTimeout(() => setPulse(0), 2000);
+    showResults(runId, run);
+  } else if (run.status === 'failed' || run.status === 'cancelled') {
+    progressFill.style.width = '100%';
+    progressFill.style.background = 'var(--error)';
+    progressPct.textContent = run.status === 'cancelled' ? 'Cancelled' : 'Failed';
+    cancelBtn.style.display = 'none';
+    showToast(run.error || ('Pipeline ' + run.status), 'error');
+  } else {
+    cancelBtn.style.display = '';
+    const completed = run.steps_completed || [];
+    const pct = run.progress || Math.min(Math.round((completed.length / STEP_NAMES.length) * 100), 99);
+    progressFill.style.width = pct + '%';
+    progressFill.style.background = '';
+    progressPct.textContent = pct + '%';
 
-  } catch (err) {
-    showToast('Pipeline failed: ' + (err.message || 'Unknown error'), 'error');
-    setPulse(0);
-    state.completed = false;
-    resetSteps();
+    if (run.created_at) {
+      const elapsedSecs = Math.floor((Date.now() - new Date(run.created_at).getTime()) / 1000);
+      progressElapsed.textContent = elapsedSecs < 60 ? elapsedSecs + 's' : Math.floor(elapsedSecs/60) + 'm ' + (elapsedSecs%60) + 's';
+    }
+
+    setPulse(pct / 100);
+
+    for (const key of completed) {
+      const idx = STEP_KEY_TO_INDEX[key];
+      if (idx !== undefined) {
+        const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
+        if (el && !el.classList.contains('done') && !el.classList.contains('skipped')) {
+          el.classList.remove('active');
+          el.classList.add('done');
+          el.querySelector('.step-indicator').textContent = '\u2713';
+        }
+      }
+    }
+
+    const activeIdx = (() => {
+      let idx = completed.length < STEP_NAMES.length ? completed.length : STEP_NAMES.length - 1;
+      while (idx < STEP_NAMES.length) {
+        const el = stepsContainer.querySelector(`[data-step="${idx}"]`);
+        if (!el || (!el.classList.contains('skipped') && !el.classList.contains('done'))) break;
+        idx++;
+      }
+      return Math.min(idx, STEP_NAMES.length - 1);
+    })();
+    stepsContainer.querySelectorAll('.step').forEach(el => {
+      const i = parseInt(el.dataset.step);
+      if (i === activeIdx && !el.classList.contains('done') && !el.classList.contains('skipped')) {
+        el.classList.add('active');
+      }
+    });
   }
 }
 
+async function cancelActiveRun() {
+  if (!state.activeRunId) return;
+  const run = state.runs.get(state.activeRunId);
+  if (!run || (run.status !== 'running' && run.status !== 'pending')) return;
+
+  try {
+    const res = await fetch(API_BASE + '/api/cancel/' + state.activeRunId, { method: 'POST' });
+    if (!res.ok) throw new Error('Cancel failed');
+    run.status = 'cancelled';
+    run.error = 'Cancelled by user';
+    stopPolling(state.activeRunId);
+    renderQueue();
+    showRunStatus(state.activeRunId);
+    showToast('Pipeline cancelled', 'error');
+  } catch (e) {
+    showToast('Failed to cancel: ' + e.message, 'error');
+  }
+}
+
+function renderQueue() {
+  const runs = Array.from(state.runs.values());
+  runs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  const activeRuns = runs.filter(r => r.status === 'running' || r.status === 'pending');
+  const completedRuns = runs.filter(r => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled');
+
+  if (runs.length === 0) {
+    queuePanel.style.display = 'none';
+    return;
+  }
+
+  queuePanel.style.display = '';
+  queueCount.textContent = runs.length + ' run' + (runs.length !== 1 ? 's' : '');
+
+  queueList.innerHTML = '';
+  for (const run of runs) {
+    const item = document.createElement('div');
+    item.className = 'queue-item' + (run.run_id === state.activeRunId ? ' active' : '');
+    item.dataset.runId = run.run_id;
+
+    const statusClass = run.status || 'pending';
+    const progressText = run.status === 'completed' ? '100%' :
+                         run.status === 'failed' ? 'Failed' :
+                         run.status === 'cancelled' ? 'Cancelled' :
+                         run.status === 'running' ? (run.progress || 0) + '%' :
+                         'Queued';
+
+    item.innerHTML = `
+      <div class="queue-item-status ${statusClass}"></div>
+      <div class="queue-item-info">
+        <div class="queue-item-name">${run.filename || run.run_id}</div>
+        <div class="queue-item-meta">${run.run_id} &middot; ${formatTimeAgo(run.created_at)}</div>
+      </div>
+      <div class="queue-item-progress">${progressText}</div>
+    `;
+
+    item.addEventListener('click', () => selectRun(run.run_id));
+    queueList.appendChild(item);
+  }
+}
+
+function formatTimeAgo(isoString) {
+  if (!isoString) return '';
+  const secs = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (secs < 60) return secs + 's ago';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+  return Math.floor(secs / 3600) + 'h ago';
+}
+
 async function runSimulated() {
+  const runId = 'demo_' + Date.now().toString(36);
+  const runData = {
+    run_id: runId,
+    status: 'running',
+    progress: 0,
+    steps_completed: [],
+    filename: state.file ? state.file.name : 'demo.mp3',
+    created_at: new Date().toISOString(),
+  };
+  state.runs.set(runId, runData);
+  selectRun(runId);
+  renderQueue();
+
   const stepDurations = [[1800, 3000], [2000, 3500], [2800, 4800], [1000, 2000], [3500, 6000]];
   const n = stepDurations.length;
   let elapsed = 0;
@@ -274,22 +464,31 @@ async function runSimulated() {
 
     el.classList.remove('active');
     el.classList.add('done');
-    el.querySelector('.step-indicator').textContent = '✓';
+    el.querySelector('.step-indicator').textContent = '\u2713';
     el.querySelector('.step-time').textContent = (delay / 1000).toFixed(1) + 's';
 
     const pct = Math.round(((i + 1) / n) * 100);
     progressFill.style.width = pct + '%';
     progressPct.textContent = pct + '%';
-    setPct(pct);
+    setPulse(pct / 100);
     elapsed += delay;
+
+    runData.progress = pct;
+    runData.steps_completed = STEP_NAMES.slice(0, i + 1).map(s => s.toLowerCase().replace(/\s+/g, '_'));
+    renderQueue();
+
     const elapsedSecs = Math.floor(elapsed / 1000);
     progressElapsed.textContent = elapsedSecs < 60 ? elapsedSecs + 's' : Math.floor(elapsedSecs/60) + 'm ' + (elapsedSecs%60) + 's';
   }
 
-  const runId = 'demo_' + Date.now().toString(36);
+  runData.status = 'completed';
+  runData.progress = 100;
+  runData.duration = elapsed / 1000;
+  renderQueue();
+
   showResults(runId, {
     duration_seconds: elapsed / 1000,
-    steps_completed: (state.includeVocals ? STEP_NAMES : STEP_NAMES.filter((_, i) => i !== 1)).map(s => s.toLowerCase().replace(/\s+/g, '_')),
+    steps_completed: STEP_NAMES.map(s => s.toLowerCase().replace(/\s+/g, '_')),
     warnings: [],
     midi_path: runId + '_final.mid',
     video_path: runId + '_synthesia.mp4',
@@ -299,18 +498,7 @@ async function runSimulated() {
   setTimeout(() => setPulse(0), 2000);
 }
 
-let pulseTimer = null;
-function setPct(pct) {
-  clearTimeout(pulseTimer);
-  setPulse(pct / 100);
-  if (pct >= 100) {
-    pulseTimer = setTimeout(() => setPulse(0), 2500);
-  }
-}
-
 function showResults(runId, data) {
-  state.completed = true;
-  state.runId = runId;
   resultsSection.classList.add('visible');
   videoContainer.classList.remove('visible');
   videoToggle.textContent = 'Show Video';
@@ -348,7 +536,7 @@ function showResults(runId, data) {
     }
   };
 
-  const secs = data.duration_seconds || 0;
+  const secs = data.duration_seconds || data.duration || 0;
   const dur = secs < 60 ? secs.toFixed(1) + 's' : (secs / 60).toFixed(1) + 'm';
   const warnings = data.warnings || [];
 
@@ -365,14 +553,8 @@ function resetSteps() {
     el.querySelector('.step-indicator').textContent = parseInt(el.dataset.step) + 1;
     el.querySelector('.step-time').textContent = '';
   });
-  const vocalStep = stepsContainer.querySelector('[data-step="1"]');
-  if (!state.includeVocals) {
-    vocalStep.classList.add('skipped');
-    vocalStep.querySelector('.step-indicator').textContent = '\u2014';
-  } else {
-    vocalStep.classList.remove('skipped');
-  }
   progressFill.style.width = '0%';
+  progressFill.style.background = '';
   progressPct.textContent = '0%';
   progressElapsed.textContent = '0s';
   resultsSection.classList.remove('visible');
@@ -391,5 +573,4 @@ function showToast(msg, type) {
   setTimeout(() => el.remove(), 4000);
 }
 
-// Boot
 document.addEventListener('DOMContentLoaded', init);
